@@ -1,7 +1,10 @@
 OS := $(shell uname)
 ARCH := $(shell uname -m)
 
-LEAP_BASE := /home/drew/Downloads/LeapDeveloperKit_2.3.1+31549_linux/LeapSDK
+ifndef LEAP_BASE
+$(error LEAP_BASE is not set)
+endif
+
 
 ifeq ($(OS), Linux)
   ifeq ($(ARCH), x86_64)
@@ -30,4 +33,4 @@ LeapRust.so: libLeapRust.o
 .PHONY: clean
 
 clean:
-	rm -f ../target/debug/build/libLeapRust.o /home/drew/Downloads/LeapDeveloperKit_2.3.1+31549_linux/LeapSDK/lib/x64/libLeapRust.so
+	rm -f ../target/debug/build/libLeapRust.o $(LEAP_BASE)/lib/x64/libLeapRust.so

@@ -113,7 +113,19 @@ struct LeapRustController* get_controller(struct LeapRustEnv* env, FrameCallback
 void add_listener(struct LeapRustController* lrcontroller) {
     Leap::Controller* controller = (Leap::Controller*)lrcontroller->controller;
     SampleListener* sampleListener = new SampleListener(lrcontroller);
+    lrcontroller->listener = sampleListener;
     controller->addListener(*sampleListener);
+}
+
+void remove_listener(struct LeapRustController* lrcontroller) {
+  Leap::Controller* controller = (Leap::Controller*)lrcontroller->controller;
+  controller->removeListener(*(SampleListener*)(lrcontroller->listener));
+  delete (SampleListener*)(lrcontroller->listener);
+}
+
+void clean_up(struct LeapRustController* lrcontroller, struct LeapRustFrame* frame) {
+  delete (Leap::Controller*)lrcontroller->controller;
+  free(frame);
 }
 
 void get_frame_from_controller(struct LeapRustController* lrcontroller, struct LeapRustFrame *const rustFrame) {

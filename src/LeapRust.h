@@ -106,14 +106,19 @@ typedef void (*FrameCallback)(struct LeapRustEnv* env, struct LeapRustFrame*);
 struct LeapRustController {
   struct LeapRustEnv *env;
   void *controller;
+  void *listener;
   FrameCallback on_frame_callback;
 };
 
 struct LeapRustFrame* blank_frame();
 
-struct LeapRustController* get_controller(struct LeapRustEnv* env, FrameCallback callback);
+struct LeapRustController* get_controller(struct LeapRustEnv*, FrameCallback);
 
 void add_listener(struct LeapRustController*);
+
+void remove_listener(struct LeapRustController*);
+
+void clean_up(struct LeapRustController*, struct LeapRustFrame*);
 
 void get_frame_from_controller(struct LeapRustController*, struct LeapRustFrame *const rustFrame);
 

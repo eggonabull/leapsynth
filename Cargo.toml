@@ -8,6 +8,7 @@ edition = "2021"
 [dependencies]
 cpal = "0.14.2"
 enum-display-derive = "0.1.1"
+vizia = {git = "https://github.com/vizia/vizia"}
 
 [build-dependencies]
 miette = { version="4.3", features=["fancy"] } # optional but gives nicer error messages!

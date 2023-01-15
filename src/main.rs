@@ -11,8 +11,11 @@ use std::sync::atomic::{AtomicPtr, Ordering};
 use std::thread;
 use std::time::{self, SystemTime};
 
-use cpal::traits::{DeviceTrait, HostTrait};
-use cpal::{Sample, SampleFormat, StreamConfig};
+use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+use cpal::{Sample, SampleFormat, StreamConfig, Stream};
+
+use vizia::prelude::*;
+
 
 
 include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
@@ -250,7 +253,7 @@ extern fn callback(env: *mut LeapRustEnv, frame_ptr: *mut LeapRustFrame) {
 }
 
 
-fn set_up_cpal(frame: *mut LeapRustFrame) {
+fn set_up_cpal(frame: *mut LeapRustFrame) -> Stream {
     let host = cpal::default_host();
     let device = host.default_output_device().expect("no output device available");
     let err_fn = |err| eprintln!("an error occurred on the output audio stream: {}", err);
@@ -281,30 +284,74 @@ fn set_up_cpal(frame: *mut LeapRustFrame) {
             }
         }
     };
-    let _stream = match sample_format {
+    let stream = match sample_format {
         SampleFormat::F32 => panic!("f32"),
         SampleFormat::I16 => device.build_output_stream(&config, create_audio_stream, err_fn),
         SampleFormat::U16 => panic!("u32"),
     }.unwrap();
+    stream
 }
 
-fn do_leap_loop(frame: *mut LeapRustFrame) {
-    unsafe {
-        let mut env = LeapRustEnv {
-            frame: frame,
-        };
-        let controller: *mut LeapRustController = get_controller(&mut env, Some(callback));
-        add_listener(controller);
+#[derive(Lens)]
+pub struct AppData {
+    count: i32,
+}
+
+// Define events to mutate the data
+pub enum AppEvent {
+    Increment,
+}
+
+// Describe how the data can be mutated
+impl Model for AppData {
+    fn event(&mut self, _: &mut EventContext, event: &mut Event) {
+        event.map(|app_event, _| match app_event {
+            AppEvent::Increment => {
+                self.count += 1;
+            }
+        });
     }
 }
 
 fn main() {
     /* The frame communicates 1-way from the controller to the cpal thread */
     let frame = unsafe { blank_frame() };
-    set_up_cpal(frame);
-    do_leap_loop(frame);
+    let mut env = LeapRustEnv {
+        frame: frame,
+    };
+    let controller: *mut LeapRustController;
+    unsafe {
+        controller = get_controller(&mut env, Some(callback));
+        add_listener(controller);
+    }
+    let stream = set_up_cpal(frame);
+
+    Application::new(|cx| {
+        // Build the model data into the tree
+        AppData { count: 0 }.build(cx);
+
+        HStack::new(cx, |cx| {
+            // Declare a button which emits an event
+            Button::new(cx, |cx| cx.emit(AppEvent::Increment), |cx| Label::new(cx, "Increment"));
+
+            // Declare a label which is bound to part of the model, updating if it changes
+            Label::new(cx, AppData::count).width(Pixels(50.0));
+        })
+        .child_space(Stretch(1.0))
+        .col_between(Pixels(50.0));
+    })
+    .title("Counter")
+    .inner_size((400, 100))
+    .run();
+
 
     loop {
         thread::sleep(time::Duration::from_secs(5));
+    }
+    thread::sleep(time::Duration::from_secs(5));
+    stream.pause();
+    unsafe {
+        remove_listener(controller);
+        clean_up(controller, frame);
     }
 }
