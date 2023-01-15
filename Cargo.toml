@@ -1,0 +1,14 @@
+[package]
+name = "leaprust"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+cpal = "0.14.2"
+enum-display-derive = "0.1.1"
+
+[build-dependencies]
+miette = { version="4.3", features=["fancy"] } # optional but gives nicer error messages!
+bindgen = "0.53.1"
