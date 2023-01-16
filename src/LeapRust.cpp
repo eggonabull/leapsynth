@@ -201,6 +201,7 @@ void get_frame_from_controller(struct LeapRustController* lrcontroller, struct L
                 LeapRustBone *lrBone = &(lrFinger->bones[bones_recorded]);
 
                 /* record bone stuff */
+                lrBone->type = (LeapRustBoneType)bones_recorded;
                 lrBone->basis = convert_matrix(bone.basis());
                 lrBone->prevJoint = convert_vector(bone.prevJoint());
                 lrBone->nextJoint = convert_vector(bone.nextJoint());

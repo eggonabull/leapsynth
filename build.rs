@@ -4,7 +4,7 @@ use std::env;
 use std::path::PathBuf;
 
 fn main() -> miette::Result<()> {
-    println!("cargo:rustc-link-search=/home/drew/Downloads/LeapDeveloperKit_2.3.1+31549_linux/LeapSDK/lib/x64");
+    println!("cargo:rustc-link-search={}", env::var("LEAP_ARCH").unwrap());
     println!("cargo:rustc-link-lib=Leap");
     println!("cargo:rustc-link-lib=LeapRust");
     println!("cargo:rerun-if-changed=src/LeapRust.h");
@@ -27,7 +27,7 @@ fn main() -> miette::Result<()> {
         .write_to_file(out_path.join("bindings.rs"))
         .expect("Couldn't write bindings!");
 
-    println!("cargo:rerun-if-changed=/home/drew/Downloads/LeapDeveloperKit_2.3.1+31549_linux/LeapSDK/lib/x64/libLeapRust.so");
+    println!("cargo:rerun-if-changed={}/libLeapRust.so", env::var("LEAP_ARCH").unwrap());
     //Add instructions to link to any C++ libraries you need.
     Ok(())
 }

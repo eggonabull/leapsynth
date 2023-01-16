@@ -18,16 +18,16 @@ else
   LEAP_LIBRARY := $(LEAP_BASE)/lib/libLeap.dylib
 endif
 
-all: LeapRust.so
+all: $(LEAP_ARCH)/libLeapRust.so
 
 # Convert library code to Object file
-libLeapRust.o: LeapRust.cpp
+../target/debug/build/libLeapRust.o: LeapRust.cpp
 	find .. -name bindings.rs -exec rm {} \;
 	mkdir -p ../target/debug/build/
 	$(CXX) -Wall -fpic -c -g -I $(LEAP_BASE)/include -o ../target/debug/build/libLeapRust.o LeapRust.cpp $(LEAP_LIBRARY) -D"USE_EXTERN=USE_EXTERN"
 
 # Create shared .SO library
-LeapRust.so: libLeapRust.o
+$(LEAP_ARCH)/libLeapRust.so: ../target/debug/build/libLeapRust.o
 	$(CXX) -g -shared -o $(LEAP_ARCH)/libLeapRust.so ../target/debug/build/libLeapRust.o $(LEAP_LIBRARY)
 
 .PHONY: clean

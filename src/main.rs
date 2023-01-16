@@ -7,14 +7,36 @@ extern crate enum_display_derive;
 use std::f32::consts::PI;
 use std::fmt;
 use std::fmt::Display;
+use std::mem;
 use std::sync::atomic::{AtomicPtr, Ordering};
-use std::thread;
 use std::time::{self, SystemTime};
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Sample, SampleFormat, StreamConfig, Stream};
 
-use vizia::prelude::*;
+use vizia::vg;
+use winit::event_loop::EventLoopProxy;
+use vizia::prelude::{
+    Application,
+    Button,
+    Canvas,
+    Context,
+    Data,
+    DrawContext,
+    Event,
+    EventContext,
+    Handle,
+    Label,
+    LayoutModifiers,
+    Lens,
+    Model,
+    Percentage,
+    Pixels,
+    Stretch,
+    View,
+    VStack,
+    WindowModifiers, DataContext
+};
 
 
 
@@ -90,7 +112,8 @@ impl Note {
         }
 
         if self.state == NoteState::Dying {
-            self.volume -= 0.0000004;
+            //self.volume -= 0.0000004;
+            self.volume = self.volume * 0.99995;
             if self.volume < 0f32 {
                 self.volume = 0f32;
                 self.state = NoteState::Dead;
@@ -123,12 +146,12 @@ impl Note {
         }
     }
 
-
     fn update_position(&mut self, position: LeapRustVector) {
         if position.x != self.position.x {
-            let delta = (position.x - self.position.x) / 5000.0;
+            let delta = (position.x - self.position.x) / 1000.0;
             let note_freq = self.freq;
             let new_freq = note_freq * (1.0 + delta);
+            self.position.x = position.x;
             self.target_freq = new_freq;
         }
     }
@@ -196,8 +219,8 @@ fn handle_finger(frame: LeapRustFrame, finger: Finger, freq: f32, notes: &mut St
     let fing_index = finger_to_usize(finger);
     let bottom = if finger != Finger::Thumb { 200f32 } else { 190f32 };
     let should_be_present = frame.handCount > 0 &&
-        frame.hands[0].fingerCount > fing_index.try_into().unwrap() &&
-        frame.hands[0].fingers[fing_index].tipPosition.y < bottom;
+    frame.hands[0].fingerCount > fing_index.try_into().unwrap() &&
+    frame.hands[0].fingers[fing_index].tipPosition.y < bottom;
     if has_note.is_none() && should_be_present {
         println!("adding {} with x {}", finger, frame.hands[0].fingers[fing_index].tipPosition.x);
         notes.add_note(Note {
@@ -237,31 +260,15 @@ fn read_and_play(frame_ptr: *mut LeapRustFrame, notes: &mut State) {
     //handle_finger(frame, 5, 1174.66f32, collector, notes);
 }
 
-static mut NUM_FRAMES: i32 = 0;
-static mut FIFTY_FRAME_TIME: SystemTime = SystemTime::UNIX_EPOCH;
-
-extern fn callback(env: *mut LeapRustEnv, frame_ptr: *mut LeapRustFrame) {
-    unsafe {
-        if NUM_FRAMES % 50 == 0 {
-            let new_now = time::SystemTime::now();
-            println!("frame {} delay {:?}", NUM_FRAMES, (new_now.duration_since(FIFTY_FRAME_TIME)));
-            FIFTY_FRAME_TIME = new_now;
-        }
-        NUM_FRAMES += 1;
-        *(*env).frame = *frame_ptr;
-    }
-}
-
-
 fn set_up_cpal(frame: *mut LeapRustFrame) -> Stream {
     let host = cpal::default_host();
     let device = host.default_output_device().expect("no output device available");
     let err_fn = |err| eprintln!("an error occurred on the output audio stream: {}", err);
     let mut supported_configs_range = device.supported_output_configs()
-        .expect("error while querying configs");
+    .expect("error while querying configs");
     let supported_config = supported_configs_range.next()
-        .expect("no supported config?!")
-        .with_max_sample_rate();
+    .expect("no supported config?!")
+    .with_max_sample_rate();
     let sample_format = supported_config.sample_format();
     let config: StreamConfig = supported_config.into();
     let mut i = 0;
@@ -294,31 +301,204 @@ fn set_up_cpal(frame: *mut LeapRustFrame) -> Stream {
 
 #[derive(Lens)]
 pub struct AppData {
-    count: i32,
-}
-
-// Define events to mutate the data
-pub enum AppEvent {
-    Increment,
+    frame: LeapRustFrame,
 }
 
 // Describe how the data can be mutated
 impl Model for AppData {
     fn event(&mut self, _: &mut EventContext, event: &mut Event) {
         event.map(|app_event, _| match app_event {
-            AppEvent::Increment => {
-                self.count += 1;
+            LeapRustFrame {id, timestamp, handCount, hands } => {
+                self.frame = LeapRustFrame {
+                    id:*id,
+                    timestamp:*timestamp,
+                    handCount: *handCount,
+                    hands: *hands
+                };
             }
         });
     }
 }
 
+impl Data for LeapRustFrame {
+    fn same(&self, other: &Self) -> bool {
+        self.timestamp == other.timestamp
+    }
+}
+
+
+struct CustomView { }
+
+impl CustomView {
+    pub fn new(cx: &mut Context, frame: impl Lens<Target = LeapRustFrame>) -> Handle<Self> {
+        Self{ }
+          .build(cx, |_|{})
+          .bind(frame, |handle, _frame_lens| {
+            handle.cx.need_redraw()
+          })
+    }
+}
+
+static mut finger_t: f32 = f32::NEG_INFINITY;
+static mut finger_l: f32 = f32::INFINITY;
+static mut finger_b: f32 = f32::INFINITY;
+static mut finger_r: f32 = f32::NEG_INFINITY;
+
+
+
+struct LeapCoordConverter {
+    t: f32,
+    l: f32,
+    b: f32,
+    r: f32
+}
+
+impl LeapCoordConverter {
+    fn convert(&self, x: f32, y: f32) -> (f32, f32) {
+        let std_leap_y_max = 650f32;
+        let std_leap_y_min = 10f32;
+        let std_leap_x_max = 330f32;
+        let std_leap_x_min = -420f32;
+        let std_leap_height = std_leap_y_max - std_leap_y_min;
+        let std_leap_width = std_leap_x_max - std_leap_x_min;
+
+        let vwidth = self.r - self.l;
+        let vheight = self.b - self.t;
+
+        let y_1 = (std_leap_y_max - y) * vheight / std_leap_height + self.t;
+        let x_1 = (x - std_leap_x_min) * vwidth / std_leap_width + self.l;
+
+        (x_1, y_1)
+    }
+}
+
+impl View for CustomView {
+    fn draw(&self, cx: &mut DrawContext, canvas: &mut Canvas) {
+        if let Some(app_data) = cx.data::<AppData>() {
+            let frame = app_data.frame;
+
+            // START - blurb to get leap finger position bounds
+            unsafe {
+                for hand_index in 0..frame.handCount {
+                    let hand = frame.hands[hand_index as usize];
+                    for finger_index in 0..hand.fingerCount {
+                        let fingertip = hand.fingers[finger_index as usize].tipPosition;
+                        if fingertip.x > finger_r { finger_r = fingertip.x}
+                        if fingertip.x < finger_l { finger_l = fingertip.x}
+                        if fingertip.y > finger_t { finger_t = fingertip.y}
+                        if fingertip.y < finger_b { finger_b = fingertip.y}
+                    }
+                }
+                //println!("{} {} {} {}", finger_t, finger_l, finger_b, finger_r);
+            }
+            // END - blurb to get leap finger position bounds
+
+            let red1 = vg::Paint::color(vg::Color::rgb(200, 50, 50));
+            let red2 = vg::Paint::color(vg::Color::rgb(200, 100, 100));
+            let blue1 = vg::Paint::color(vg::Color::rgb(50, 50, 200));
+            let green1 = vg::Paint::color(vg::Color::rgb(50, 100, 50));
+            let green2 = vg::Paint::color(vg::Color::rgb(50, 150, 50));
+            let green3 = vg::Paint::color(vg::Color::rgb(50, 200, 50));
+            let green4 = vg::Paint::color(vg::Color::rgb(100, 200, 100));
+
+
+            let bounds = cx.bounds();
+            let ((t, l), (b, r)) = (bounds.top_left(), bounds.bottom_right());
+            let coord_converter = LeapCoordConverter { t, l, b, r };
+
+            // draw first (from tip) nuckle
+            let mut path = vg::Path::new();
+            path.move_to(t, l);
+            for hand_index in 0..frame.handCount {
+                let hand = frame.hands[hand_index as usize];
+                for finger_index in 0..hand.fingerCount {
+                    let finger = hand.fingers[finger_index as usize];
+                    for bone in finger.bones {
+                        //println!("bone type {}", bone.type_);
+                        if bone.type_== LeapRustBoneType_TYPE_INTERMEDIATE {
+                            let (x, y) = coord_converter.convert(bone.center.x, bone.center.y);
+                            path.circle(x, y, 10.0);
+                        }
+                    }
+                }
+            }
+            canvas.fill_path(&mut path, &red2);
+
+            let mut path = vg::Path::new();
+            path.move_to(t, l);
+            for hand_index in 0..frame.handCount {
+                let hand = frame.hands[hand_index as usize];
+                for finger_index in 0..hand.fingerCount {
+                    let finger = hand.fingers[finger_index as usize];
+                    let (x, y) = coord_converter.convert(finger.tipPosition.x, finger.tipPosition.y);
+                    path.circle(x, y, 10.0);
+                }
+            }
+            canvas.fill_path(&mut path, &red1);
+            let mut path = vg::Path::new();
+            let (_, border_y) = coord_converter.convert(0f32, 200.0);
+            path.move_to(l, border_y);
+            path.line_to(r,  border_y);
+            canvas.stroke_path(&mut path, &blue1);
+
+            let mut path = vg::Path::new();
+            path.circle(l, t, 10.0);
+            canvas.fill_path(&mut path, &green1);
+
+            let mut path = vg::Path::new();
+            path.circle(r, t, 10.0);
+            canvas.fill_path(&mut path, &green2);
+
+            let mut path = vg::Path::new();
+            path.circle(l, b, 10.0);
+            canvas.fill_path(&mut path, &green3);
+
+            let mut path = vg::Path::new();
+            path.circle(r, b, 10.0);
+            canvas.fill_path(&mut path, &green4);
+        }
+    }
+}
+
+static mut NUM_FRAMES: i32 = 0;
+static mut FIFTY_FRAME_TIME: SystemTime = SystemTime::UNIX_EPOCH;
+extern fn callback(env: *mut LeapRustEnv, frame_ptr: *mut LeapRustFrame) {
+    unsafe {
+        if NUM_FRAMES % 50 == 0 {
+            let new_now = time::SystemTime::now();
+            println!("frame {} delay {:?}", NUM_FRAMES, (new_now.duration_since(FIFTY_FRAME_TIME)));
+            FIFTY_FRAME_TIME = new_now;
+        }
+        NUM_FRAMES += 1;
+        *(*env).frame = *frame_ptr;
+        let proxy: &Box<EventLoopProxy<Event>> = mem::transmute((*env).event_proxy);
+        proxy.send_event(Event::new(*frame_ptr)).expect("poop");
+    }
+}
+
+
 fn main() {
-    /* The frame communicates 1-way from the controller to the cpal thread */
     let frame = unsafe { blank_frame() };
-    let mut env = LeapRustEnv {
+    let frame2 = unsafe { blank_frame() };
+    /* The frame communicates 1-way from the controller to the cpal thread */
+    let app = Application::new(move |cx| {
+        // Build the model data into the tree
+        AppData { frame: unsafe{*frame2}}.build(cx);
+        VStack::new(cx, |cx| {
+            Label::new(cx, "Hello 1");
+            CustomView::new(cx, AppData::frame).width(Percentage(100.0)).height(Percentage(100.0));
+        })
+        .child_space(Stretch(1.0))
+        .col_between(Pixels(50.0));
+    })
+    .title("Counter")
+    .inner_size((1024, 768));
+
+    let event_proxy = Box::new(app.get_proxy());
+    let mut env = unsafe { LeapRustEnv {
         frame: frame,
-    };
+        event_proxy: mem::transmute(&event_proxy)
+    }};
     let controller: *mut LeapRustController;
     unsafe {
         controller = get_controller(&mut env, Some(callback));
@@ -326,30 +506,10 @@ fn main() {
     }
     let stream = set_up_cpal(frame);
 
-    Application::new(|cx| {
-        // Build the model data into the tree
-        AppData { count: 0 }.build(cx);
+    app.run();
 
-        HStack::new(cx, |cx| {
-            // Declare a button which emits an event
-            Button::new(cx, |cx| cx.emit(AppEvent::Increment), |cx| Label::new(cx, "Increment"));
+    stream.pause().expect("Failed to pause stream");
 
-            // Declare a label which is bound to part of the model, updating if it changes
-            Label::new(cx, AppData::count).width(Pixels(50.0));
-        })
-        .child_space(Stretch(1.0))
-        .col_between(Pixels(50.0));
-    })
-    .title("Counter")
-    .inner_size((400, 100))
-    .run();
-
-
-    loop {
-        thread::sleep(time::Duration::from_secs(5));
-    }
-    thread::sleep(time::Duration::from_secs(5));
-    stream.pause();
     unsafe {
         remove_listener(controller);
         clean_up(controller, frame);

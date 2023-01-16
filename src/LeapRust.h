@@ -99,6 +99,7 @@ struct LeapRustFrame {
 
 struct LeapRustEnv {
   struct LeapRustFrame* frame;
+  void* event_proxy;
 };
 
 typedef void (*FrameCallback)(struct LeapRustEnv* env, struct LeapRustFrame*);
