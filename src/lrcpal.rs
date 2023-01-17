@@ -1,20 +1,25 @@
 use cpal::{Sample, SampleFormat, StreamConfig, Stream};
 use cpal::traits::{DeviceTrait, HostTrait};
 use crate::leaprust::{LeapRustVector, LeapRustFrame};
+use std::collections::HashMap;
 use std::f32::consts::PI;
 use std::fmt;
 use std::fmt::Display;
 use std::sync::atomic::{AtomicPtr, Ordering};
 
+use crate::notefreq;
+
+use crate::lrviz::AppData;
+
 #[derive(Debug, Clone, Copy, Display, PartialEq)]
-enum NoteState {
+pub enum NoteState {
     Rising,
     Steady,
     Dying,
     Dead
 }
 
-#[derive(Debug, Clone, Copy, Display, PartialEq)]
+#[derive(Debug, Clone, Copy, Display, PartialEq, Eq, Hash)]
 enum Finger {
     Thumb,
     Index,
@@ -24,13 +29,12 @@ enum Finger {
 }
 
 #[derive(Debug, Clone, Copy, Display, PartialEq)]
-enum NoteShape {
+pub enum NoteShape {
     Sine,
     SineSquared,
     Saw,
     Triangle
 }
-
 
 #[derive(Debug, Copy, Clone)]
 struct Note {
@@ -119,7 +123,9 @@ impl Note {
     }
 }
 
-struct State {
+pub struct State {
+    selected_map: i32,
+    freq_map: HashMap<i32, HashMap<Finger, f32>>,
     notes: Vec<Note>,
     sample_rate: u32
 }
@@ -176,20 +182,43 @@ fn finger_to_usize(finger: Finger) -> usize {
     return finger as usize;
 }
 
-fn handle_finger(frame: LeapRustFrame, finger: Finger, freq: f32, notes: &mut State) {
-    let has_note = notes.has_note(finger);
-    let fing_index = finger_to_usize(finger);
+fn is_finger_active(frame: LeapRustFrame, finger: Finger, fing_index: usize) -> bool {
     let bottom = if finger != Finger::Thumb { 200f32 } else { 190f32 };
+    if frame.handCount == 0 {
+        return false;
+    }
+    if frame.handCount == 1 && frame.hands[0].isLeft == 1 {
+        return false;
+    }
+    let right_hand = if frame.handCount == 1 {
+        &frame.hands[0]
+    } else {
+        if frame.hands[0].isLeft == 0 {
+            &frame.hands[0]
+        } else {
+            &frame.hands[1]
+        }
+    };
     let should_be_present = frame.handCount > 0 &&
-    frame.hands[0].fingerCount > fing_index.try_into().unwrap() &&
-    frame.hands[0].fingers[fing_index].tipPosition.y < bottom;
+        right_hand.fingerCount > fing_index.try_into().unwrap() &&
+        right_hand.fingers[fing_index].tipPosition.y < bottom;
+    return should_be_present
+}
+
+fn handle_finger(frame: LeapRustFrame, finger: Finger, notes: &mut State) {
+    let fing_index = finger_to_usize(finger);
+    let has_note = notes.has_note(finger);
+    let should_be_present = is_finger_active(frame, finger, fing_index);
+    let freq = notes.freq_map
+        .get(&notes.selected_map).expect("poo")
+        .get(&finger).expect("asdf");
     if has_note.is_none() && should_be_present {
         println!("adding {} with x {}", finger, frame.hands[0].fingers[fing_index].tipPosition.x);
         notes.add_note(Note {
             shape: NoteShape::SineSquared,
             finger,
-            freq: freq,
-            target_freq: freq,
+            freq: *freq,
+            target_freq: *freq,
 
             state: NoteState::Rising,
             volume: 0.0,
@@ -214,11 +243,11 @@ fn read_and_play(frame_ptr: *mut LeapRustFrame, notes: &mut State) {
     unsafe {
         frame = *frame_ptr;
     }
-    handle_finger(frame, Finger::Thumb, 440f32, notes);
-    handle_finger(frame, Finger::Index, 523.25f32, notes);
-    handle_finger(frame, Finger::Middle, 659.25f32, notes);
-    handle_finger(frame, Finger::Ring, 783.99f32, notes);
-    handle_finger(frame, Finger::Little, 987.77f32, notes);
+    handle_finger(frame, Finger::Thumb, notes);
+    handle_finger(frame, Finger::Index, notes);
+    handle_finger(frame, Finger::Middle, notes);
+    handle_finger(frame, Finger::Ring, notes);
+    handle_finger(frame, Finger::Little, notes);
     //handle_finger(frame, 5, 1174.66f32, collector, notes);
 }
 
@@ -227,14 +256,28 @@ pub fn set_up_cpal(frame: *mut LeapRustFrame) -> Stream {
     let device = host.default_output_device().expect("no output device available");
     let err_fn = |err| eprintln!("an error occurred on the output audio stream: {}", err);
     let mut supported_configs_range = device.supported_output_configs()
-    .expect("error while querying configs");
+        .expect("error while querying configs");
     let supported_config = supported_configs_range.next()
-    .expect("no supported config?!")
-    .with_max_sample_rate();
+        .expect("no supported config?!")
+        .with_max_sample_rate();
     let sample_format = supported_config.sample_format();
     let config: StreamConfig = supported_config.into();
     let mut i = 0;
-    let mut state = State { notes: Vec::new(), sample_rate: config.sample_rate.0 };
+    let mut default_map = HashMap::new();
+    default_map.insert(Finger::Thumb, notefreq::C_4);
+    default_map.insert(Finger::Index, notefreq::D_4);
+    default_map.insert(Finger::Middle, notefreq::E_4);
+    default_map.insert(Finger::Ring, notefreq::F_4);
+    default_map.insert(Finger::Little, notefreq::G_4);
+    let mut map = HashMap::new();
+    map.insert(0, default_map);
+
+    let mut state = State {
+        notes: Vec::new(),
+        sample_rate: config.sample_rate.0,
+        freq_map: map,
+        selected_map: 0
+    };
     let mut last_timestamp: i32 = 0;
     let aframe: AtomicPtr<LeapRustFrame> = AtomicPtr::new(frame);
     let create_audio_stream = move |data: &mut [f32], _cb: &cpal::OutputCallbackInfo| {

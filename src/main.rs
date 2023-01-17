@@ -1,13 +1,12 @@
 #![allow(non_snake_case, non_camel_case_types, non_upper_case_globals)]
 #[macro_use]
 extern crate enum_display_derive;
-
 extern crate cpal;
 
 mod leaprust;
 mod lrcpal;
 mod lrviz;
-
+mod notefreq;
 
 use cpal::traits::StreamTrait;
 
@@ -21,12 +20,12 @@ use leaprust::{
     LeapRustFrame,
     remove_listener,
 };
-use lrviz::{AppData, FrameUpdate, CustomView };
+
+use lrviz::{AppData, FrameUpdate, CustomView};
 
 use std::mem;
 use std::time::{self, SystemTime};
 
-use winit::event_loop::EventLoopProxy;
 use vizia::prelude::{
     Application,
     Event,
@@ -36,17 +35,16 @@ use vizia::prelude::{
     Model,
     Percentage,
     Pixels,
+    RadioButton,
     Stretch,
     VStack,
-    WindowModifiers,
+    WindowModifiers, EmitContext,
 };
-
-
-
-
+use winit::event_loop::EventLoopProxy;
 
 static mut NUM_FRAMES: i32 = 0;
 static mut FIFTY_FRAME_TIME: SystemTime = SystemTime::UNIX_EPOCH;
+
 extern fn callback(env: *mut LeapRustEnv, frame_ptr: *mut LeapRustFrame) {
     unsafe {
         if NUM_FRAMES % 50 == 0 {
@@ -61,21 +59,26 @@ extern fn callback(env: *mut LeapRustEnv, frame_ptr: *mut LeapRustFrame) {
     }
 }
 
-
 fn main() {
     let frame = unsafe { blank_frame() };
     /* The frame communicates 1-way from the controller to the cpal thread */
     let app = Application::new(move |cx| {
         // Build the model data into the tree
-        AppData { frame: frame, timestamp: 0 }.build(cx);
+        AppData { frame: frame, timestamp: 0, placeholder: false }.build(cx);
         VStack::new(cx, |cx| {
             Label::new(cx, "Hello 1");
             HStack::new(cx , |cx| {
-                //RadioButton::new(cx, );
-            });
-            CustomView::new(cx, AppData::timestamp).width(Percentage(100.0)).height(Percentage(100.0));
+                RadioButton::new(cx, AppData::placeholder);
+                RadioButton::new(cx, AppData::placeholder);
+                RadioButton::new(cx, AppData::placeholder).on_select(|cx| cx.emit("clicked"));
+            })
+                .child_space(Stretch(1.0))
+                .col_between(Pixels(50.0));
+            CustomView::new(cx, AppData::timestamp)
+                .width(Percentage(40.0))
+                .height(Percentage(99.0));
         })
-        .child_space(Stretch(1.0))
+        //.child_space(Stretch(1.0))
         .col_between(Pixels(50.0));
     })
     .title("Counter")

@@ -1,5 +1,7 @@
 use crate::leaprust::{LeapRustFrame, LeapRustBoneType_TYPE_INTERMEDIATE};
 
+use crate::lrcpal::{State, NoteShape};
+
 use vizia::vg;
 use vizia::prelude::{
     Canvas,
@@ -21,6 +23,7 @@ pub struct FrameUpdate {}
 pub struct AppData {
     pub timestamp: i32,
     pub frame: *mut LeapRustFrame,
+    pub placeholder: bool,
 }
 
 // Describe how the data can be mutated
@@ -81,7 +84,7 @@ static mut finger_r: f32 = f32::NEG_INFINITY;
 impl View for CustomView {
     fn draw(&self, cx: &mut DrawContext, canvas: &mut Canvas) {
         if let Some(app_data) = cx.data::<AppData>() {
-            let frame = unsafe {*(app_data.frame)};
+            let frame = &unsafe {*(app_data.frame)};
 
             // START - blurb to get leap finger position bounds
             unsafe {
@@ -112,7 +115,7 @@ impl View for CustomView {
             let ((t, l), (b, r)) = (bounds.top_left(), bounds.bottom_right());
             let coord_converter = LeapCoordConverter { t, l, b, r };
 
-            // draw first (from tip) nuckle
+            // draw intermediate nuckle center
             let mut path = vg::Path::new();
             path.move_to(t, l);
             for hand_index in 0..frame.handCount {
@@ -130,6 +133,7 @@ impl View for CustomView {
             }
             canvas.fill_path(&mut path, &red2);
 
+            // draw tip of fingers
             let mut path = vg::Path::new();
             path.move_to(t, l);
             for hand_index in 0..frame.handCount {
@@ -141,15 +145,18 @@ impl View for CustomView {
                 }
             }
             canvas.fill_path(&mut path, &red1);
+
+            // blue trigger border
             let mut path = vg::Path::new();
             let (_, border_y) = coord_converter.convert(0f32, 200.0);
             path.move_to(l, border_y);
             path.line_to(r,  border_y);
             canvas.stroke_path(&mut path, &blue1);
 
+            // boundary circles -- temporary
             let mut path = vg::Path::new();
-            path.circle(l, t, 10.0);
-            canvas.fill_path(&mut path, &green1);
+            path.rect(l, t, r-l, b-t);
+            canvas.stroke_path(&mut path, &green1);
 
             let mut path = vg::Path::new();
             path.circle(r, t, 10.0);
