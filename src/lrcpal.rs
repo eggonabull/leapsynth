@@ -1,15 +1,15 @@
 use cpal::{Sample, SampleFormat, StreamConfig, Stream};
 use cpal::traits::{DeviceTrait, HostTrait};
 use crate::leaprust::{LeapRustVector, LeapRustFrame};
+use crate::lrviz::AppEvent;
 use std::collections::HashMap;
 use std::f32::consts::PI;
-use std::fmt;
+use std::{fmt, mem};
 use std::fmt::Display;
 use std::sync::atomic::{AtomicPtr, Ordering};
+use rtrb::Consumer;
 
 use crate::notefreq;
-
-use crate::lrviz::AppData;
 
 #[derive(Debug, Clone, Copy, Display, PartialEq)]
 pub enum NoteState {
@@ -127,10 +127,41 @@ pub struct State {
     selected_map: i32,
     freq_map: HashMap<i32, HashMap<Finger, f32>>,
     notes: Vec<Note>,
-    sample_rate: u32
+    retrigger: bool,
+    sample_rate: u32,
+    shape: NoteShape
 }
 
 impl State {
+    fn new(sample_rate: u32) -> State {
+        let mut map: HashMap<i32, HashMap<Finger, f32>> = HashMap::new();
+        let mut default_map = HashMap::new();
+        default_map.insert(Finger::Thumb, notefreq::C_4);
+        default_map.insert(Finger::Index, notefreq::D_4);
+        default_map.insert(Finger::Middle, notefreq::E_4);
+        default_map.insert(Finger::Ring, notefreq::F_4);
+        default_map.insert(Finger::Little, notefreq::G_4);
+        map.insert(0, default_map);
+
+        let mut second_map = HashMap::new();
+        second_map.insert(Finger::Thumb, notefreq::E_4);
+        second_map.insert(Finger::Index, notefreq::G_4);
+        second_map.insert(Finger::Middle, notefreq::A_4);
+        second_map.insert(Finger::Ring, notefreq::C_5);
+        second_map.insert(Finger::Little, notefreq::E_5);
+        map.insert(1, second_map);
+
+        let state = State {
+            notes: Vec::new(),
+            sample_rate: sample_rate,
+            freq_map: map,
+            selected_map: 0,
+            retrigger: false,
+            shape: NoteShape::SineSquared
+        };
+        state
+    }
+
     fn get_sample(&mut self, i: u32) -> f32 {
         let mut val = 0f32;
         for note in &mut self.notes {
@@ -160,12 +191,14 @@ impl State {
     }
 
     fn has_note(&self, finger: Finger) -> Option<usize> {
-        let index = self.notes.iter().position(|x| x.matches(finger));
+        let index = self.notes.iter()
+            .position(|x| x.matches(finger));
         return index;
     }
 
     fn remove_note(&mut self, finger: Finger) {
-        let index = self.notes.iter().position(|x| x.matches(finger));
+        let index = self.notes.iter()
+            .position(|x| x.matches(finger));
         if let Some(index) = index {
             self.notes[index].kill()
         }
@@ -182,7 +215,7 @@ fn finger_to_usize(finger: Finger) -> usize {
     return finger as usize;
 }
 
-fn is_finger_active(frame: LeapRustFrame, finger: Finger, fing_index: usize) -> bool {
+fn is_finger_active(frame: &LeapRustFrame, finger: Finger, fing_index: usize) -> bool {
     let bottom = if finger != Finger::Thumb { 200f32 } else { 190f32 };
     if frame.handCount == 0 {
         return false;
@@ -205,7 +238,7 @@ fn is_finger_active(frame: LeapRustFrame, finger: Finger, fing_index: usize) -> 
     return should_be_present
 }
 
-fn handle_finger(frame: LeapRustFrame, finger: Finger, notes: &mut State) {
+fn handle_finger(frame: &LeapRustFrame, finger: Finger, notes: &mut State) {
     let fing_index = finger_to_usize(finger);
     let has_note = notes.has_note(finger);
     let should_be_present = is_finger_active(frame, finger, fing_index);
@@ -215,7 +248,7 @@ fn handle_finger(frame: LeapRustFrame, finger: Finger, notes: &mut State) {
     if has_note.is_none() && should_be_present {
         println!("adding {} with x {}", finger, frame.hands[0].fingers[fing_index].tipPosition.x);
         notes.add_note(Note {
-            shape: NoteShape::SineSquared,
+            shape: notes.shape,
             finger,
             freq: *freq,
             target_freq: *freq,
@@ -241,8 +274,20 @@ fn handle_finger(frame: LeapRustFrame, finger: Finger, notes: &mut State) {
 fn read_and_play(frame_ptr: *mut LeapRustFrame, notes: &mut State) {
     let frame;
     unsafe {
-        frame = *frame_ptr;
+        frame = &(*frame_ptr);
     }
+    for hand_index in 0..frame.handCount {
+        let hand = &frame.hands[hand_index as usize];
+        if hand.isLeft == 0 {
+            continue;
+        }
+        if hand.fingers[1].tipPosition.y < 200.0 {
+            notes.selected_map = 1;
+        } else if hand.fingers[0].tipPosition.y < 200.0 {
+            notes.selected_map = 0;
+        }
+    }
+
     handle_finger(frame, Finger::Thumb, notes);
     handle_finger(frame, Finger::Index, notes);
     handle_finger(frame, Finger::Middle, notes);
@@ -251,7 +296,7 @@ fn read_and_play(frame_ptr: *mut LeapRustFrame, notes: &mut State) {
     //handle_finger(frame, 5, 1174.66f32, collector, notes);
 }
 
-pub fn set_up_cpal(frame: *mut LeapRustFrame) -> Stream {
+pub fn set_up_cpal(frame: *mut LeapRustFrame, mut ring_buf: Consumer<AppEvent>) -> Stream {
     let host = cpal::default_host();
     let device = host.default_output_device().expect("no output device available");
     let err_fn = |err| eprintln!("an error occurred on the output audio stream: {}", err);
@@ -263,25 +308,21 @@ pub fn set_up_cpal(frame: *mut LeapRustFrame) -> Stream {
     let sample_format = supported_config.sample_format();
     let config: StreamConfig = supported_config.into();
     let mut i = 0;
-    let mut default_map = HashMap::new();
-    default_map.insert(Finger::Thumb, notefreq::C_4);
-    default_map.insert(Finger::Index, notefreq::D_4);
-    default_map.insert(Finger::Middle, notefreq::E_4);
-    default_map.insert(Finger::Ring, notefreq::F_4);
-    default_map.insert(Finger::Little, notefreq::G_4);
-    let mut map = HashMap::new();
-    map.insert(0, default_map);
-
-    let mut state = State {
-        notes: Vec::new(),
-        sample_rate: config.sample_rate.0,
-        freq_map: map,
-        selected_map: 0
-    };
+    let mut state = State::new(config.sample_rate.0);
+    
     let mut last_timestamp: i32 = 0;
     let aframe: AtomicPtr<LeapRustFrame> = AtomicPtr::new(frame);
     let create_audio_stream = move |data: &mut [f32], _cb: &cpal::OutputCallbackInfo| {
         let tframe = aframe.load(Ordering::Relaxed);
+        if let Some(app_event) = ring_buf.pop().ok() {
+            match app_event {
+                AppEvent::SetShape(shape) => {
+                    println!("popping event");
+                    state.shape = shape;
+                }
+                _ => {}
+            }
+        }
         for sample in data.iter_mut() {
             let frame_stamp = unsafe { (*tframe).timestamp };
             if last_timestamp != frame_stamp {

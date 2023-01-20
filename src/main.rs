@@ -1,4 +1,3 @@
-#![allow(non_snake_case, non_camel_case_types, non_upper_case_globals)]
 #[macro_use]
 extern crate enum_display_derive;
 extern crate cpal;
@@ -21,13 +20,16 @@ use leaprust::{
     remove_listener,
 };
 
-use lrviz::{AppData, FrameUpdate, CustomView};
+use lrviz::{AppData, AppEvent, CustomView};
+use lrcpal::{NoteShape, set_up_cpal};
+use rtrb::RingBuffer;
 
 use std::mem;
 use std::time::{self, SystemTime};
 
 use vizia::prelude::{
     Application,
+    Button,
     Event,
     HStack,
     Label,
@@ -42,6 +44,19 @@ use vizia::prelude::{
 };
 use winit::event_loop::EventLoopProxy;
 
+const STYLE: &str = r#"
+
+    button {
+        border-radius: 3px;
+        child-space: 1s;
+    }
+    hstack {
+        child-space: 1s;
+        col-between: 20px;
+    }
+"#;
+
+
 static mut NUM_FRAMES: i32 = 0;
 static mut FIFTY_FRAME_TIME: SystemTime = SystemTime::UNIX_EPOCH;
 
@@ -55,30 +70,38 @@ extern fn callback(env: *mut LeapRustEnv, frame_ptr: *mut LeapRustFrame) {
         NUM_FRAMES += 1;
         *(*env).frame = *frame_ptr;
         let proxy: &Box<EventLoopProxy<Event>> = mem::transmute((*env).event_proxy);
-        proxy.send_event(Event::new(FrameUpdate {})).expect("poop");
+        proxy.send_event(Event::new(AppEvent::FrameUpdate)).expect("poop");
     }
 }
 
 fn main() {
     let frame = unsafe { blank_frame() };
+    let (mut prod, mut cons) = RingBuffer::<AppEvent>::new(5);
     /* The frame communicates 1-way from the controller to the cpal thread */
     let app = Application::new(move |cx| {
+        cx.add_theme(STYLE);
         // Build the model data into the tree
-        AppData { frame: frame, timestamp: 0, placeholder: false }.build(cx);
+        AppData{
+            frame: frame,
+            timestamp: 0,
+            placeholder: false,
+            note_shape: NoteShape::SineSquared,
+            ring_buf: prod
+        }.build(cx);
         VStack::new(cx, |cx| {
-            Label::new(cx, "Hello 1");
             HStack::new(cx , |cx| {
-                RadioButton::new(cx, AppData::placeholder);
-                RadioButton::new(cx, AppData::placeholder);
-                RadioButton::new(cx, AppData::placeholder).on_select(|cx| cx.emit("clicked"));
+                Button::new(cx, |cx| cx.emit(AppEvent::SetShape(NoteShape::Sine)), |cx| Label::new(cx, "Sin"));
+                Button::new(cx, |cx| cx.emit(AppEvent::SetShape(NoteShape::SineSquared)), |cx| Label::new(cx, "S^2"));
+                Button::new(cx, |cx| cx.emit(AppEvent::SetShape(NoteShape::Triangle)), |cx| Label::new(cx, "Tri"));
+                Button::new(cx, |cx| cx.emit(AppEvent::SetShape(NoteShape::Saw)), |cx| Label::new(cx, "Saw"));
             })
                 .child_space(Stretch(1.0))
-                .col_between(Pixels(50.0));
+                .col_between(Pixels(4.0));
             CustomView::new(cx, AppData::timestamp)
-                .width(Percentage(40.0))
-                .height(Percentage(99.0));
+                .width(Percentage(99.0))
+                .height(Percentage(50.0));
         })
-        //.child_space(Stretch(1.0))
+        .child_space(Stretch(1.0))
         .col_between(Pixels(50.0));
     })
     .title("Counter")
@@ -87,14 +110,14 @@ fn main() {
     let event_proxy = Box::new(app.get_proxy());
     let mut env = unsafe { LeapRustEnv {
         frame: frame,
-        event_proxy: mem::transmute(&event_proxy)
+        event_proxy: mem::transmute(&event_proxy),
     }};
     let controller: *mut LeapRustController;
     unsafe {
         controller = get_controller(&mut env, Some(callback));
         add_listener(controller);
     }
-    let stream = lrcpal::set_up_cpal(frame);
+    let stream = set_up_cpal(frame, cons);
 
     app.run();
 

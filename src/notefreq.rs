@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 pub static C_0: f32 = 16.35;
 pub static Cs0: f32 = 17.32;
 pub static D_0: f32 = 18.35;

@@ -1,6 +1,9 @@
+use std::sync::Arc;
+use std::mem;
+
 use crate::leaprust::{LeapRustFrame, LeapRustBoneType_TYPE_INTERMEDIATE};
 
-use crate::lrcpal::{State, NoteShape};
+use crate::lrcpal::{NoteShape};
 
 use vizia::vg;
 use vizia::prelude::{
@@ -15,8 +18,13 @@ use vizia::prelude::{
     Model,
     View,
 };
+use rtrb::Producer;
 
-pub struct FrameUpdate {}
+#[derive(Copy, Clone)]
+pub enum AppEvent {
+    FrameUpdate,
+    SetShape(NoteShape)
+}
 
 
 #[derive(Lens)]
@@ -24,14 +32,21 @@ pub struct AppData {
     pub timestamp: i32,
     pub frame: *mut LeapRustFrame,
     pub placeholder: bool,
+    pub note_shape: NoteShape,
+    pub ring_buf: Producer<AppEvent>
 }
 
 // Describe how the data can be mutated
 impl Model for AppData {
     fn event(&mut self, _: &mut EventContext, event: &mut Event) {
         event.map(|app_event, _| match app_event {
-            FrameUpdate{} => {
+            AppEvent::FrameUpdate => {
                 self.timestamp = unsafe { (*(self.frame)).timestamp };
+            },
+            AppEvent::SetShape(shape) => {
+                self.note_shape = *shape;
+                println!("pushing event");
+                self.ring_buf.push(*app_event).expect("Failed to push");
             }
         });
     }
@@ -112,7 +127,7 @@ impl View for CustomView {
 
 
             let bounds = cx.bounds();
-            let ((t, l), (b, r)) = (bounds.top_left(), bounds.bottom_right());
+            let ((l, t), (r, b)) = (bounds.top_left(), bounds.bottom_right());
             let coord_converter = LeapCoordConverter { t, l, b, r };
 
             // draw intermediate nuckle center
@@ -157,18 +172,6 @@ impl View for CustomView {
             let mut path = vg::Path::new();
             path.rect(l, t, r-l, b-t);
             canvas.stroke_path(&mut path, &green1);
-
-            let mut path = vg::Path::new();
-            path.circle(r, t, 10.0);
-            canvas.fill_path(&mut path, &green2);
-
-            let mut path = vg::Path::new();
-            path.circle(l, b, 10.0);
-            canvas.fill_path(&mut path, &green3);
-
-            let mut path = vg::Path::new();
-            path.circle(r, b, 10.0);
-            canvas.fill_path(&mut path, &green4);
         }
     }
 }
