@@ -1,0 +1,7 @@
+Glissando mode
+wrist-switch support
+single finger chord support
+left hand play support
+tremelo support
+attack/decay settings
+sample support

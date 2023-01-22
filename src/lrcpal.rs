@@ -4,7 +4,7 @@ use crate::leaprust::{LeapRustVector, LeapRustFrame};
 use crate::lrviz::AppEvent;
 use std::collections::HashMap;
 use std::f32::consts::PI;
-use std::{fmt, mem};
+use std::fmt;
 use std::fmt::Display;
 use std::sync::atomic::{AtomicPtr, Ordering};
 use rtrb::Consumer;
@@ -35,6 +35,35 @@ pub enum NoteShape {
     Saw,
     Triangle
 }
+
+struct PlaybackWave {
+    freq: f32,
+    shape: NoteShape,
+}
+
+struct PlaybackSample {
+    sample_def: Vec<f32>,
+    sample_rate: f32
+}
+
+enum PlaybackType {
+    wave(PlaybackWave),
+    sample(PlaybackSample)
+}
+
+pub struct TriggerDefinition {
+    notes: Vec<PlaybackType>,
+}
+
+pub struct State {
+    selected_map: i32,
+    freq_map: HashMap<i32, HashMap<Finger, TriggerDefinition>>,
+    active_playback: Vec<Note>,
+    retrigger: bool,
+    sample_rate: u32,
+    shape: NoteShape
+}
+
 
 #[derive(Debug, Copy, Clone)]
 struct Note {
@@ -123,20 +152,12 @@ impl Note {
     }
 }
 
-pub struct State {
-    selected_map: i32,
-    freq_map: HashMap<i32, HashMap<Finger, f32>>,
-    notes: Vec<Note>,
-    retrigger: bool,
-    sample_rate: u32,
-    shape: NoteShape
-}
 
 impl State {
     fn new(sample_rate: u32) -> State {
-        let mut map: HashMap<i32, HashMap<Finger, f32>> = HashMap::new();
+        let mut map: HashMap<i32, HashMap<Finger, TriggerDefinition>> = HashMap::new();
         let mut default_map = HashMap::new();
-        default_map.insert(Finger::Thumb, notefreq::C_4);
+        default_map.insert(Finger::Thumb, TriggerDefinition{notes: vec!(PlaybackType::wave(notefreq::C_4))});
         default_map.insert(Finger::Index, notefreq::D_4);
         default_map.insert(Finger::Middle, notefreq::E_4);
         default_map.insert(Finger::Ring, notefreq::F_4);
@@ -152,7 +173,7 @@ impl State {
         map.insert(1, second_map);
 
         let state = State {
-            notes: Vec::new(),
+            active_playback: Vec::new(),
             sample_rate: sample_rate,
             freq_map: map,
             selected_map: 0,
@@ -164,21 +185,21 @@ impl State {
 
     fn get_sample(&mut self, i: u32) -> f32 {
         let mut val = 0f32;
-        for note in &mut self.notes {
+        for note in &mut self.active_playback {
             let note_val = note.getSample(self.sample_rate, i);
             val += note_val;
         }
 
-        self.notes.retain(|x| x.should_retain());
+        self.active_playback.retain(|x| x.should_retain());
 
-        if i % 270000 == 0 && self.notes.len() > 0 {
-            println!("Notes: {}", self.notes.len());
+        if i % 270000 == 0 && self.active_playback.len() > 0 {
+            println!("Notes: {}", self.active_playback.len());
         }
 
         if val > 1.0 {
             val = 1.0;
         }
-        if self.notes.len() > 0 {
+        if self.active_playback.len() > 0 {
             val
         } else {
             0 as f32
@@ -186,21 +207,21 @@ impl State {
     }
 
     fn add_note(&mut self, note: Note) {
-        self.notes.push(note);
-        self.notes.retain(|x| x.should_retain())
+        self.active_playback.push(note);
+        self.active_playback.retain(|x| x.should_retain())
     }
 
     fn has_note(&self, finger: Finger) -> Option<usize> {
-        let index = self.notes.iter()
+        let index = self.active_playback.iter()
             .position(|x| x.matches(finger));
         return index;
     }
 
     fn remove_note(&mut self, finger: Finger) {
-        let index = self.notes.iter()
+        let index = self.active_playback.iter()
             .position(|x| x.matches(finger));
         if let Some(index) = index {
-            self.notes[index].kill()
+            self.active_playback[index].kill()
         }
     }
 }
@@ -247,26 +268,33 @@ fn handle_finger(frame: &LeapRustFrame, finger: Finger, notes: &mut State) {
         .get(&finger).expect("asdf");
     if has_note.is_none() && should_be_present {
         println!("adding {} with x {}", finger, frame.hands[0].fingers[fing_index].tipPosition.x);
-        notes.add_note(Note {
-            shape: notes.shape,
-            finger,
-            freq: *freq,
-            target_freq: *freq,
-
-            state: NoteState::Rising,
-            volume: 0.0,
-            target_volume: 0.2,
-
-            position: frame.hands[0].fingers[fing_index].tipPosition,
-            phase: 0.0,
-        });
+        for playback_type in freq.notes {
+            match playback_type {
+                PlaybackType::wave(PlaybackWave { freq, shape }) => {
+                    notes.add_note(Note {
+                        shape: notes.shape,
+                        finger,
+                        freq: freq,
+                        target_freq: freq,
+            
+                        state: NoteState::Rising,
+                        volume: 0.0,
+                        target_volume: 0.2,
+            
+                        position: frame.hands[0].fingers[fing_index].tipPosition,
+                        phase: 0.0,
+                    });
+                },
+                _ => {}
+            }
+        }
     } else if has_note.is_some() && !should_be_present {
         println!("removing {}", finger);
         notes.remove_note(finger);
     } else if has_note.is_some() && should_be_present {
         // check for bends
         let finger_position = frame.hands[0].fingers[fing_index].tipPosition;
-        let note = &mut (notes.notes[has_note.unwrap()]);
+        let note = &mut (notes.active_playback[has_note.unwrap()]);
         note.update_position(finger_position)
     }
 }
@@ -332,7 +360,7 @@ pub fn set_up_cpal(frame: *mut LeapRustFrame, mut ring_buf: Consumer<AppEvent>) 
             let val = state.get_sample(i);
             *sample = Sample::from(&val);
             i = i + 1;
-            if state.notes.len() == 0 {
+            if state.active_playback.len() == 0 {
                 i = 0;
             }
         }
