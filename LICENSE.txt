@@ -1,0 +1,10 @@
+This software is subject to the Leap SDK Agreement
+More information can be found
+https://central.leapmotion.com/agreements/SdkAgreement
+
+You may use my software however you like,
+provided it is in accordance with the 
+licenses it is subject to due to its 
+dependencies and acknowledge that I have
+no legal liability for the results of
+using my software.
