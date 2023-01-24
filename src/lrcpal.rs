@@ -9,6 +9,21 @@ use std::fmt::Display;
 use std::sync::atomic::{AtomicPtr, Ordering};
 use rtrb::Consumer;
 
+use std::io;
+
+use std::fs::File;
+use std::path::Path;
+
+use symphonia::core::io::MediaSourceStream;
+use symphonia_bundle_mp3::MpaReader;
+use symphonia::core::audio::SampleBuffer;
+use symphonia::core::codecs::DecoderOptions;
+use symphonia::core::errors::Error;
+use symphonia::core::units::{Time, TimeBase};
+use symphonia::core::formats::FormatOptions;
+use symphonia::core::meta::MetadataOptions;
+use symphonia::core::probe::{Hint, self};
+
 use crate::notefreq;
 
 #[derive(Debug, Clone, Copy, Display, PartialEq)]
@@ -44,8 +59,8 @@ struct PlaybackWave {
 
 #[derive(Debug, Clone, PartialEq)]
 struct PlaybackSample {
-    sample_def: Vec<f32>,
-    sample_rate: f32
+    sample_def: Box<[u8]>,
+    freq: f32
 }
 
 
@@ -55,8 +70,28 @@ enum PlaybackType {
     sample(PlaybackSample)
 }
 
+impl PlaybackType {
+    fn get_sample(&self, position: f32) -> f32 {
+        match self {
+            PlaybackType::wave(PlaybackWave { freq, shape }) => 0f32,
+            PlaybackType::sample(PlaybackSample { sample_def, sample_rate }) => 1f32
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct TriggerDefinition {
     notes: Vec<PlaybackType>,
+}
+
+impl TriggerDefinition {
+    fn get_sample(&self, position: f32) {
+        let mut sum = 0f32;
+        for note in &self.notes {
+            sum += note.get_sample(position);
+        }
+        sum
+    }
 }
 
 pub struct State {
@@ -69,20 +104,17 @@ pub struct State {
 }
 
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Clone)]
 struct Note {
     finger: Finger,
     state: NoteState,
-    shape: NoteShape,
-
-    freq: f32,
     target_freq: f32,
-
     volume: f32,
     target_volume: f32,
-
     position: LeapRustVector,
     phase: f32,
+
+    trigger: TriggerDefinition,
 }
 
 
@@ -206,6 +238,35 @@ impl State {
         )});
         map.insert(1, second_map);
 
+        let file = Box::new(File::open(Path::new("/home/drew/Downloads/Strings/violin/violin_A3_1_piano_arco-normal.mp3")).unwrap());
+        let mss = MediaSourceStream::new(file, Default::default());
+        let hint = Hint::new();
+        let format_opts: FormatOptions = Default::default();
+        let metadata_opts: MetadataOptions = Default::default();
+        let decoder_opts: DecoderOptions = Default::default();
+        let probed = symphonia::default::get_probe().format(&hint, mss, &format_opts, &metadata_opts).unwrap();
+        let mut format = probed.format;
+        let track = format.default_track().unwrap();
+        let mut decoder = symphonia::default::get_codecs().make(&track.codec_params, &decoder_opts).unwrap();
+        let track_id = track.id;
+        let mut sample_count = 0;
+        let mut sample_buf: Option<SampleBuffer<f32>> = None;
+        let packet = format.next_packet().unwrap();
+        let bufref = decoder.decode(&packet).expect("couldn't decode packet");
+        let sample = PlaybackType::sample(PlaybackSample {
+            sample_def: packet.data,
+            sample_rate: bufref.spec().rate as f32
+        });
+
+        let mut third_map = HashMap::new();
+        third_map.insert(Finger::Thumb, TriggerDefinition{notes: vec!(sample.clone())});
+        third_map.insert(Finger::Index, TriggerDefinition{notes: vec!(sample.clone())});
+        third_map.insert(Finger::Middle, TriggerDefinition{notes: vec!(sample.clone())});
+        third_map.insert(Finger::Ring, TriggerDefinition{notes: vec!(sample.clone())});
+        third_map.insert(Finger::Little, TriggerDefinition{notes: vec!(sample)});
+        map.insert(2, third_map);
+
+
         let state = State {
             active_playback: Vec::new(),
             sample_rate: sample_rate,
@@ -310,16 +371,20 @@ fn handle_finger(frame: &LeapRustFrame, finger: Finger, notes: &mut State) {
                         finger,
                         freq: freq,
                         target_freq: freq,
-            
+
                         state: NoteState::Rising,
                         volume: 0.0,
                         target_volume: 0.2,
-            
+
                         position: frame.hands[0].fingers[fing_index].tipPosition,
                         phase: 0.0,
                     });
                 },
-                _ => {}
+                PlaybackType::sample(PlaybackSample { sample_def, sample_rate }) => {
+                    notes.add_note(Note {
+
+                    })
+                }
             }
         }
     } else if has_note.is_some() && !should_be_present {
@@ -371,7 +436,7 @@ pub fn set_up_cpal(frame: *mut LeapRustFrame, mut ring_buf: Consumer<AppEvent>) 
     let config: StreamConfig = supported_config.into();
     let mut i = 0;
     let mut state = State::new(config.sample_rate.0);
-    
+
     let mut last_timestamp: i32 = 0;
     let aframe: AtomicPtr<LeapRustFrame> = AtomicPtr::new(frame);
     let create_audio_stream = move |data: &mut [f32], _cb: &cpal::OutputCallbackInfo| {
