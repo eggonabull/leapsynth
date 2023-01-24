@@ -1,0 +1,199 @@
+make: Entering directory '/home/drew/Documents/drew/leapsynth/src'
+make: Nothing to be done for 'all'.
+make: Leaving directory '/home/drew/Documents/drew/leapsynth/src'
+Initialized
+Service Connected
+Device Changed
+id: Connected Device: LP87681424254 v1.7.0
+  isStreaming: true
+Connected
+Focus Gained
+frame 0 delay Ok(1674547699.48501217s)
+Hover changed to Entity (index: 11, generation: 0) parent: Some(Entity (index: 1, generation: 0)), view: <Unnamed>, posx: 0, posy: 0 width: 340282350000000000000000000000000000000 height: 340282350000000000000000000000000000000
+Hover changed to Entity (index: 0, generation: 0) parent: None, view: <Unnamed>, posx: 0, posy: 0 width: 1024 height: 768
+frame 50 delay Ok(1.172578703s)
+frame 100 delay Ok(451.596325ms)
+frame 150 delay Ok(471.049559ms)
+frame 200 delay Ok(452.040841ms)
+frame 250 delay Ok(470.892333ms)
+adding Thumb with x 38.036457
+Notes: 1
+frame 300 delay Ok(450.904296ms)
+adding Little with x 135.44781
+removing Little
+removing Thumb
+frame 350 delay Ok(451.79272ms)
+Notes: 2
+frame 400 delay Ok(470.994161ms)
+adding Thumb with x 39.6091
+Notes: 3
+frame 450 delay Ok(453.501274ms)
+removing Thumb
+removing Thumb
+adding Index with x 53.13648
+removing Thumb
+frame 500 delay Ok(467.263873ms)
+Notes: 6
+removing Index
+removing Index
+removing Index
+adding Middle with x 63.7902
+frame 550 delay Ok(451.784332ms)
+removing Middle
+removing Middle
+Notes: 3
+removing Middle
+frame 600 delay Ok(452.718091ms)
+adding Thumb with x 36.745476
+Notes: 1
+frame 650 delay Ok(469.516896ms)
+adding Index with x 50.715263
+frame 700 delay Ok(451.873219ms)
+removing Thumb
+Notes: 2
+adding Middle with x 67.16407
+removing Index
+frame 750 delay Ok(470.045692ms)
+removing Middle
+Notes: 1
+frame 800 delay Ok(461.645552ms)
+frame 850 delay Ok(452.602473ms)
+adding Thumb with x 44.173645
+Notes: 3
+removing Thumb
+removing Thumb
+removing Thumb
+adding Thumb with x 45.43017
+frame 900 delay Ok(478.022921ms)
+adding Index with x 52.701984
+Notes: 6
+frame 950 delay Ok(453.025288ms)
+removing Thumb
+removing Thumb
+removing Thumb
+removing Index
+removing Index
+removing Index
+adding Middle with x 69.48999
+frame 1000 delay Ok(468.975543ms)
+Notes: 5
+frame 1050 delay Ok(451.859592ms)
+removing Middle
+removing Middle
+adding Index with x 53.693672
+removing Middle
+frame 1100 delay Ok(451.774577ms)
+Notes: 6
+adding Thumb with x 27.249945
+removing Index
+removing Index
+removing Index
+frame 1150 delay Ok(469.572936ms)
+Notes: 3
+frame 1200 delay Ok(452.514702ms)
+adding Little with x 120.43658
+frame 1250 delay Ok(469.935688ms)
+removing Thumb
+removing Thumb
+removing Thumb
+Notes: 6
+frame 1300 delay Ok(451.831862ms)
+Notes: 3
+removing Little
+adding Ring with x 80.122795
+removing Little
+removing Little
+frame 1350 delay Ok(451.894381ms)
+frame 1400 delay Ok(470.33265ms)
+Notes: 3
+removing Ring
+removing Ring
+removing Ring
+adding Middle with x 56.624466
+frame 1450 delay Ok(451.71578ms)
+Notes: 3
+removing Middle
+frame 1500 delay Ok(469.8614ms)
+removing Middle
+removing Middle
+adding Index with x 40.504715
+frame 1550 delay Ok(452.710463ms)
+removing Index
+removing Index
+Notes: 3
+removing Index
+adding Thumb with x 16.340078
+frame 1600 delay Ok(451.637027ms)
+Notes: 3
+frame 1650 delay Ok(471.01442ms)
+removing Thumb
+removing Thumb
+removing Thumb
+frame 1700 delay Ok(450.194847ms)
+frame 1750 delay Ok(469.977287ms)
+adding Thumb with x 33.339848
+Notes: 1
+frame 1800 delay Ok(453.444584ms)
+adding Index with x 52.706215
+removing Thumb
+Notes: 2
+frame 1850 delay Ok(450.980808ms)
+removing Index
+adding Middle with x 70.874115
+frame 1900 delay Ok(469.135943ms)
+removing Middle
+Notes: 1
+frame 1950 delay Ok(452.703555ms)
+frame 2000 delay Ok(470.641619ms)
+adding Thumb with x 46.185013
+Notes: 3
+frame 2050 delay Ok(451.305436ms)
+adding Index with x 57.348656
+removing Thumb
+removing Thumb
+removing Thumb
+Notes: 6
+frame 2100 delay Ok(451.780812ms)
+removing Index
+removing Index
+removing Index
+adding Middle with x 69.87922
+frame 2150 delay Ok(481.324974ms)
+Notes: 3
+frame 2200 delay Ok(449.447731ms)
+removing Middle
+removing Middle
+removing Middle
+Notes: 3
+frame 2250 delay Ok(470.766191ms)
+frame 2300 delay Ok(451.550918ms)
+frame 2350 delay Ok(450.538222ms)
+frame 2400 delay Ok(1.088925971s)
+frame 2450 delay Ok(1.736959273s)
+frame 2500 delay Ok(1.807404663s)
+frame 2550 delay Ok(1.737697524s)
+frame 2600 delay Ok(1.737593316s)
+frame 2650 delay Ok(1.806951197s)
+frame 2700 delay Ok(1.735985363s)
+frame 2750 delay Ok(1.808767668s)
+frame 2800 delay Ok(1.737184208s)
+frame 2850 delay Ok(1.735681781s)
+frame 2900 delay Ok(1.843167987s)
+frame 2950 delay Ok(1.738056684s)
+frame 3000 delay Ok(1.806893007s)
+frame 3050 delay Ok(1.737537763s)
+frame 3100 delay Ok(1.737486429s)
+frame 3150 delay Ok(1.807550867s)
+frame 3200 delay Ok(1.735357957s)
+frame 3250 delay Ok(1.80904311s)
+frame 3300 delay Ok(1.737242714s)
+frame 3350 delay Ok(1.736643326s)
+frame 3400 delay Ok(1.807031681s)
+frame 3450 delay Ok(1.737653082s)
+frame 3500 delay Ok(1.876087027s)
+frame 3550 delay Ok(939.372888ms)
+frame 3600 delay Ok(1.714239937s)
+frame 3650 delay Ok(1.805206802s)
+frame 3700 delay Ok(1.739468255s)
+frame 3750 delay Ok(1.804735255s)
+frame 3800 delay Ok(1.738474236s)
