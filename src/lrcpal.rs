@@ -54,15 +54,72 @@ pub enum NoteShape {
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct PlaybackWave {
     freq: f32,
+    target_freq: f32,
     shape: NoteShape,
+    phase: f32,
+}
+
+impl PlaybackWave {
+    fn new(freq: f32, shape: NoteShape) -> PlaybackWave {
+        PlaybackWave { freq: freq, target_freq: freq, shape: shape, phase: 0f32 }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
 struct PlaybackSample {
     sample_def: Box<[u8]>,
-    freq: f32
+    freq: f32,
+    target_freq: f32,
 }
 
+trait PlaybackTypeItem {
+    fn get_sample(&mut self, sample_rate: f32, i: u32) -> f32;
+    fn adjust_freq(&mut self, mult: f32);
+}
+
+
+impl PlaybackTypeItem for PlaybackSample {
+    fn get_sample(&mut self, sample_rate: f32, i: u32) -> f32 {
+        return 0f32;
+    }
+
+    fn adjust_freq(&mut self, mult: f32) {
+        self.freq = self.freq * mult;
+    }
+}
+
+impl PlaybackTypeItem for PlaybackWave {
+    fn get_sample(&mut self, sample_rate: f32, i: u32) -> f32 {
+        let twopi = 2.0 * PI;
+        let t = (i as f32 % (sample_rate as f32 * self.freq)) as f32 / sample_rate as f32;
+        if self.target_freq != self.freq {
+            self.phase = (self.phase + 2.0 * PI * (t * self.freq - self.target_freq * t)) % twopi;
+            self.freq = self.target_freq;
+        }
+        let position = (2.0 * PI * t * self.freq) + self.phase;
+        let val = position.sin();
+        match self.shape {
+            NoteShape::Sine => val,
+            NoteShape::SineSquared => val * val * val.signum(),
+            NoteShape::Saw => ((position % twopi / twopi) - 0.5),
+            NoteShape::Triangle => {
+                let pos = position % twopi / twopi;
+                let result = if pos < 0.25 {
+                    pos * 4.0 - 1.0
+                } else if pos < 0.75 {
+                    1.0 - (pos - 0.25) * 4.0
+                } else {
+                    (pos - 0.75) * 4.0 - 1.0
+                };
+                result
+            }
+        }
+    }
+
+    fn adjust_freq(&mut self, mult: f32) {
+        self.freq = self.freq * mult;
+    }
+}
 
 #[derive(Debug, Clone, PartialEq)]
 enum PlaybackType {
@@ -71,13 +128,21 @@ enum PlaybackType {
 }
 
 impl PlaybackType {
-    fn get_sample(&self, position: f32) -> f32 {
+    fn get_sample(&mut self, sample_rate: f32, i: u32) -> f32 {
         match self {
-            PlaybackType::wave(PlaybackWave { freq, shape }) => 0f32,
-            PlaybackType::sample(PlaybackSample { sample_def, sample_rate }) => 1f32
+            PlaybackType::wave(x) => x.get_sample(sample_rate, i),
+            PlaybackType::sample(x) => x.get_sample(sample_rate, i),
+        }
+    }
+
+    fn adjust_freq(&mut self, mult: f32) {
+        match self {
+            PlaybackType::wave(x) => x.adjust_freq(mult),
+            PlaybackType::sample(x) => x.adjust_freq(mult),
         }
     }
 }
+
 
 #[derive(Debug, Clone)]
 pub struct TriggerDefinition {
@@ -85,10 +150,10 @@ pub struct TriggerDefinition {
 }
 
 impl TriggerDefinition {
-    fn get_sample(&self, position: f32) {
+    fn get_sample(&mut self, sample_rate: f32, i: u32) -> f32 {
         let mut sum = 0f32;
-        for note in &self.notes {
-            sum += note.get_sample(position);
+        for note in &mut self.notes {
+            sum += note.get_sample(sample_rate, i);
         }
         sum
     }
@@ -108,7 +173,6 @@ pub struct State {
 struct Note {
     finger: Finger,
     state: NoteState,
-    target_freq: f32,
     volume: f32,
     target_volume: f32,
     position: LeapRustVector,
@@ -123,11 +187,11 @@ impl Note {
         self.state = NoteState::Dying;
     }
 
-    fn should_retain(self) -> bool {
+    fn should_retain(&self) -> bool {
         return self.state != NoteState::Dead
     }
 
-    fn matches(self, finger: Finger) -> bool {
+    fn matches(&self, finger: Finger) -> bool {
         return self.finger == finger && self.state != NoteState::Dying && self.state != NoteState::Dead
     }
 
@@ -151,39 +215,17 @@ impl Note {
             }
         }
 
-        let twopi = 2.0 * PI;
-        let t = (i as f32 % (sample_rate as f32 * self.freq)) as f32 / sample_rate as f32;
-        if self.target_freq != self.freq {
-            self.phase = (self.phase + 2.0 * PI * (t * self.freq - self.target_freq * t)) % twopi;
-            self.freq = self.target_freq;
-        }
-        let position = (2.0 * PI * t * self.freq) + self.phase;
-        let val = position.sin();
-        match self.shape {
-            NoteShape::Sine => val * self.volume,
-            NoteShape::SineSquared => val * val * val.signum() * self.volume,
-            NoteShape::Saw => ((position % twopi / twopi) - 0.5) * self.volume,
-            NoteShape::Triangle => {
-                let pos = position % twopi / twopi;
-                let result = if pos < 0.25 {
-                    pos * 4.0 - 1.0
-                } else if pos < 0.75 {
-                    1.0 - (pos - 0.25) * 4.0
-                } else {
-                    (pos - 0.75) * 4.0 - 1.0
-                };
-                result * self.volume
-            }
-        }
+        self.trigger.get_sample(sample_rate as f32, i) * self.volume
     }
 
     fn update_position(&mut self, position: LeapRustVector) {
         if position.x != self.position.x {
             let delta = (position.x - self.position.x) / 1000.0;
-            let note_freq = self.freq;
-            let new_freq = note_freq * (1.0 + delta);
+            let multiplier = (1.0 + delta);
+            for wave in &mut self.trigger.notes {
+                wave.adjust_freq(multiplier);
+            }
             self.position.x = position.x;
-            self.target_freq = new_freq;
         }
     }
 }
@@ -194,47 +236,47 @@ impl State {
         let mut map: HashMap<i32, HashMap<Finger, TriggerDefinition>> = HashMap::new();
         let mut default_map = HashMap::new();
         default_map.insert(Finger::Thumb, TriggerDefinition{notes: vec!(
-            PlaybackType::wave(PlaybackWave { freq: notefreq::C_4, shape: NoteShape::SineSquared })
+            PlaybackType::wave(PlaybackWave::new(notefreq::C_4, NoteShape::SineSquared))
         )});
         default_map.insert(Finger::Index, TriggerDefinition{notes: vec!(
-            PlaybackType::wave(PlaybackWave { freq: notefreq::D_4, shape: NoteShape::SineSquared })
+            PlaybackType::wave(PlaybackWave::new(notefreq::D_4, NoteShape::SineSquared))
         )});
         default_map.insert(Finger::Middle, TriggerDefinition{notes: vec!(
-            PlaybackType::wave(PlaybackWave { freq: notefreq::E_4, shape: NoteShape::SineSquared })
+            PlaybackType::wave(PlaybackWave::new(notefreq::E_4, NoteShape::SineSquared))
         )});
         default_map.insert(Finger::Ring, TriggerDefinition{notes: vec!(
-            PlaybackType::wave(PlaybackWave { freq: notefreq::F_4, shape: NoteShape::SineSquared })
+            PlaybackType::wave(PlaybackWave::new(notefreq::F_4, NoteShape::SineSquared))
         )});
         default_map.insert(Finger::Little, TriggerDefinition{notes: vec!(
-            PlaybackType::wave(PlaybackWave { freq: notefreq::G_4, shape: NoteShape::SineSquared })
+            PlaybackType::wave(PlaybackWave::new(notefreq::G_4, NoteShape::SineSquared))
         )});
         map.insert(0, default_map);
 
         let mut second_map = HashMap::new();
         second_map.insert(Finger::Thumb, TriggerDefinition{notes: vec!(
-            PlaybackType::wave(PlaybackWave { freq: notefreq::C_4, shape: NoteShape::SineSquared }),
-            PlaybackType::wave(PlaybackWave { freq: notefreq::E_4, shape: NoteShape::SineSquared }),
-            PlaybackType::wave(PlaybackWave { freq: notefreq::G_4, shape: NoteShape::SineSquared })
+            PlaybackType::wave(PlaybackWave::new(notefreq::C_4, NoteShape::SineSquared)),
+            PlaybackType::wave(PlaybackWave::new(notefreq::E_4, NoteShape::SineSquared)),
+            PlaybackType::wave(PlaybackWave::new(notefreq::G_4, NoteShape::SineSquared))
         )});
         second_map.insert(Finger::Index, TriggerDefinition{notes: vec!(
-            PlaybackType::wave(PlaybackWave { freq: notefreq::D_4, shape: NoteShape::SineSquared }),
-            PlaybackType::wave(PlaybackWave { freq: notefreq::F_4, shape: NoteShape::SineSquared }),
-            PlaybackType::wave(PlaybackWave { freq: notefreq::A_4, shape: NoteShape::SineSquared })
+            PlaybackType::wave(PlaybackWave::new(notefreq::D_4, NoteShape::SineSquared)),
+            PlaybackType::wave(PlaybackWave::new(notefreq::F_4, NoteShape::SineSquared)),
+            PlaybackType::wave(PlaybackWave::new(notefreq::A_4, NoteShape::SineSquared))
         )});
         second_map.insert(Finger::Middle, TriggerDefinition{notes: vec!(
-            PlaybackType::wave(PlaybackWave { freq: notefreq::E_4, shape: NoteShape::SineSquared }),
-            PlaybackType::wave(PlaybackWave { freq: notefreq::G_4, shape: NoteShape::SineSquared }),
-            PlaybackType::wave(PlaybackWave { freq: notefreq::B_4, shape: NoteShape::SineSquared })
+            PlaybackType::wave(PlaybackWave::new(notefreq::E_4, NoteShape::SineSquared)),
+            PlaybackType::wave(PlaybackWave::new(notefreq::G_4, NoteShape::SineSquared)),
+            PlaybackType::wave(PlaybackWave::new(notefreq::B_4, NoteShape::SineSquared))
         )});
         second_map.insert(Finger::Ring, TriggerDefinition{notes: vec!(
-            PlaybackType::wave(PlaybackWave { freq: notefreq::F_4, shape: NoteShape::SineSquared }),
-            PlaybackType::wave(PlaybackWave { freq: notefreq::A_4, shape: NoteShape::SineSquared }),
-            PlaybackType::wave(PlaybackWave { freq: notefreq::C_5, shape: NoteShape::SineSquared })
+            PlaybackType::wave(PlaybackWave::new(notefreq::F_4, NoteShape::SineSquared)),
+            PlaybackType::wave(PlaybackWave::new(notefreq::A_4, NoteShape::SineSquared)),
+            PlaybackType::wave(PlaybackWave::new(notefreq::C_5, NoteShape::SineSquared))
         )});
         second_map.insert(Finger::Little, TriggerDefinition{notes: vec!(
-            PlaybackType::wave(PlaybackWave { freq: notefreq::G_4, shape: NoteShape::SineSquared }),
-            PlaybackType::wave(PlaybackWave { freq: notefreq::B_4, shape: NoteShape::SineSquared }),
-            PlaybackType::wave(PlaybackWave { freq: notefreq::D_5, shape: NoteShape::SineSquared })
+            PlaybackType::wave(PlaybackWave::new(notefreq::G_4, NoteShape::SineSquared)),
+            PlaybackType::wave(PlaybackWave::new(notefreq::B_4, NoteShape::SineSquared)),
+            PlaybackType::wave(PlaybackWave::new(notefreq::D_5, NoteShape::SineSquared))
         )});
         map.insert(1, second_map);
 
@@ -253,17 +295,18 @@ impl State {
         let mut sample_buf: Option<SampleBuffer<f32>> = None;
         let packet = format.next_packet().unwrap();
         let bufref = decoder.decode(&packet).expect("couldn't decode packet");
-        let sample = PlaybackType::sample(PlaybackSample {
+        let sample = PlaybackSample {
             sample_def: packet.data,
-            sample_rate: bufref.spec().rate as f32
-        });
+            freq: bufref.spec().rate as f32,
+            target_freq: bufref.spec().rate as f32,
+        };
 
         let mut third_map = HashMap::new();
-        third_map.insert(Finger::Thumb, TriggerDefinition{notes: vec!(sample.clone())});
-        third_map.insert(Finger::Index, TriggerDefinition{notes: vec!(sample.clone())});
-        third_map.insert(Finger::Middle, TriggerDefinition{notes: vec!(sample.clone())});
-        third_map.insert(Finger::Ring, TriggerDefinition{notes: vec!(sample.clone())});
-        third_map.insert(Finger::Little, TriggerDefinition{notes: vec!(sample)});
+        third_map.insert(Finger::Thumb, TriggerDefinition{notes: vec!(PlaybackType::sample(sample.clone()))});
+        third_map.insert(Finger::Index, TriggerDefinition{notes: vec!(PlaybackType::sample(sample.clone()))});
+        third_map.insert(Finger::Middle, TriggerDefinition{notes: vec!(PlaybackType::sample(sample.clone()))});
+        third_map.insert(Finger::Ring, TriggerDefinition{notes: vec!(PlaybackType::sample(sample.clone()))});
+        third_map.insert(Finger::Little, TriggerDefinition{notes: vec!(PlaybackType::sample(sample.clone()))});
         map.insert(2, third_map);
 
 
@@ -358,35 +401,23 @@ fn handle_finger(frame: &LeapRustFrame, finger: Finger, notes: &mut State) {
     let fing_index = finger_to_usize(finger);
     let has_note = notes.has_note(finger);
     let should_be_present = is_finger_active(frame, finger, fing_index);
-    let freq = notes.freq_map
+    let trigger_def = notes.freq_map
         .get(&notes.selected_map).expect("poo")
         .get(&finger).expect("asdf");
     if has_note.is_none() && should_be_present {
         println!("adding {} with x {}", finger, frame.hands[0].fingers[fing_index].tipPosition.x);
-        for playback_type in freq.notes.clone() {
-            match playback_type {
-                PlaybackType::wave(PlaybackWave { freq, shape }) => {
-                    notes.add_note(Note {
-                        shape: shape,
-                        finger,
-                        freq: freq,
-                        target_freq: freq,
+        notes.add_note(Note {
+            trigger: trigger_def.clone(),
 
-                        state: NoteState::Rising,
-                        volume: 0.0,
-                        target_volume: 0.2,
+            finger,
 
-                        position: frame.hands[0].fingers[fing_index].tipPosition,
-                        phase: 0.0,
-                    });
-                },
-                PlaybackType::sample(PlaybackSample { sample_def, sample_rate }) => {
-                    notes.add_note(Note {
+            state: NoteState::Rising,
+            volume: 0.0,
+            target_volume: 0.2,
 
-                    })
-                }
-            }
-        }
+            position: frame.hands[0].fingers[fing_index].tipPosition,
+            phase: 0.0,
+        });
     } else if has_note.is_some() && !should_be_present {
         println!("removing {}", finger);
         notes.remove_note(finger);

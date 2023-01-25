@@ -8,7 +8,6 @@ mod lrcpal;
 mod lrviz;
 mod notefreq;
 
-use symphonia_bundle_mp3::MpaReader;
 
 use cpal::traits::StreamTrait;
 
