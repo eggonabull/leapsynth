@@ -9,7 +9,7 @@ edition = "2021"
 cpal = "0.14.2"
 enum-display-derive = "0.1.1"
 rtrb = "0.2.3"
-symphonia = "0.5.2"
+symphonia = { version="0.5.2", features=["mp3"] }
 symphonia-bundle-mp3 = "0.5.2"
 vizia = {git = "https://github.com/vizia/vizia"}
 winit = "0.27.5"

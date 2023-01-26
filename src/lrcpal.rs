@@ -9,20 +9,15 @@ use std::fmt::Display;
 use std::sync::atomic::{AtomicPtr, Ordering};
 use rtrb::Consumer;
 
-use std::io;
-
 use std::fs::File;
 use std::path::Path;
 
 use symphonia::core::io::MediaSourceStream;
-use symphonia_bundle_mp3::MpaReader;
 use symphonia::core::audio::SampleBuffer;
 use symphonia::core::codecs::DecoderOptions;
-use symphonia::core::errors::Error;
-use symphonia::core::units::{Time, TimeBase};
 use symphonia::core::formats::FormatOptions;
 use symphonia::core::meta::MetadataOptions;
-use symphonia::core::probe::{Hint, self};
+use symphonia::core::probe::Hint;
 
 use crate::notefreq;
 
@@ -101,7 +96,7 @@ impl PlaybackTypeItem for PlaybackWave {
         match self.shape {
             NoteShape::Sine => val,
             NoteShape::SineSquared => val * val * val.signum(),
-            NoteShape::Saw => ((position % twopi / twopi) - 0.5),
+            NoteShape::Saw => (position % twopi / twopi) - 0.5,
             NoteShape::Triangle => {
                 let pos = position % twopi / twopi;
                 let result = if pos < 0.25 {
@@ -123,22 +118,22 @@ impl PlaybackTypeItem for PlaybackWave {
 
 #[derive(Debug, Clone, PartialEq)]
 enum PlaybackType {
-    wave(PlaybackWave),
-    sample(PlaybackSample)
+    Wave(PlaybackWave),
+    Sample(PlaybackSample)
 }
 
 impl PlaybackType {
     fn get_sample(&mut self, sample_rate: f32, i: u32) -> f32 {
         match self {
-            PlaybackType::wave(x) => x.get_sample(sample_rate, i),
-            PlaybackType::sample(x) => x.get_sample(sample_rate, i),
+            PlaybackType::Wave(x) => x.get_sample(sample_rate, i),
+            PlaybackType::Sample(x) => x.get_sample(sample_rate, i),
         }
     }
 
     fn adjust_freq(&mut self, mult: f32) {
         match self {
-            PlaybackType::wave(x) => x.adjust_freq(mult),
-            PlaybackType::sample(x) => x.adjust_freq(mult),
+            PlaybackType::Wave(x) => x.adjust_freq(mult),
+            PlaybackType::Sample(x) => x.adjust_freq(mult),
         }
     }
 }
@@ -236,62 +231,64 @@ impl State {
         let mut map: HashMap<i32, HashMap<Finger, TriggerDefinition>> = HashMap::new();
         let mut default_map = HashMap::new();
         default_map.insert(Finger::Thumb, TriggerDefinition{notes: vec!(
-            PlaybackType::wave(PlaybackWave::new(notefreq::C_4, NoteShape::SineSquared))
+            PlaybackType::Wave(PlaybackWave::new(notefreq::C_4, NoteShape::SineSquared))
         )});
         default_map.insert(Finger::Index, TriggerDefinition{notes: vec!(
-            PlaybackType::wave(PlaybackWave::new(notefreq::D_4, NoteShape::SineSquared))
+            PlaybackType::Wave(PlaybackWave::new(notefreq::D_4, NoteShape::SineSquared))
         )});
         default_map.insert(Finger::Middle, TriggerDefinition{notes: vec!(
-            PlaybackType::wave(PlaybackWave::new(notefreq::E_4, NoteShape::SineSquared))
+            PlaybackType::Wave(PlaybackWave::new(notefreq::E_4, NoteShape::SineSquared))
         )});
         default_map.insert(Finger::Ring, TriggerDefinition{notes: vec!(
-            PlaybackType::wave(PlaybackWave::new(notefreq::F_4, NoteShape::SineSquared))
+            PlaybackType::Wave(PlaybackWave::new(notefreq::F_4, NoteShape::SineSquared))
         )});
         default_map.insert(Finger::Little, TriggerDefinition{notes: vec!(
-            PlaybackType::wave(PlaybackWave::new(notefreq::G_4, NoteShape::SineSquared))
+            PlaybackType::Wave(PlaybackWave::new(notefreq::G_4, NoteShape::SineSquared))
         )});
         map.insert(0, default_map);
 
         let mut second_map = HashMap::new();
         second_map.insert(Finger::Thumb, TriggerDefinition{notes: vec!(
-            PlaybackType::wave(PlaybackWave::new(notefreq::C_4, NoteShape::SineSquared)),
-            PlaybackType::wave(PlaybackWave::new(notefreq::E_4, NoteShape::SineSquared)),
-            PlaybackType::wave(PlaybackWave::new(notefreq::G_4, NoteShape::SineSquared))
+            PlaybackType::Wave(PlaybackWave::new(notefreq::C_4, NoteShape::SineSquared)),
+            PlaybackType::Wave(PlaybackWave::new(notefreq::E_4, NoteShape::SineSquared)),
+            PlaybackType::Wave(PlaybackWave::new(notefreq::G_4, NoteShape::SineSquared))
         )});
         second_map.insert(Finger::Index, TriggerDefinition{notes: vec!(
-            PlaybackType::wave(PlaybackWave::new(notefreq::D_4, NoteShape::SineSquared)),
-            PlaybackType::wave(PlaybackWave::new(notefreq::F_4, NoteShape::SineSquared)),
-            PlaybackType::wave(PlaybackWave::new(notefreq::A_4, NoteShape::SineSquared))
+            PlaybackType::Wave(PlaybackWave::new(notefreq::D_4, NoteShape::SineSquared)),
+            PlaybackType::Wave(PlaybackWave::new(notefreq::F_4, NoteShape::SineSquared)),
+            PlaybackType::Wave(PlaybackWave::new(notefreq::A_4, NoteShape::SineSquared))
         )});
         second_map.insert(Finger::Middle, TriggerDefinition{notes: vec!(
-            PlaybackType::wave(PlaybackWave::new(notefreq::E_4, NoteShape::SineSquared)),
-            PlaybackType::wave(PlaybackWave::new(notefreq::G_4, NoteShape::SineSquared)),
-            PlaybackType::wave(PlaybackWave::new(notefreq::B_4, NoteShape::SineSquared))
+            PlaybackType::Wave(PlaybackWave::new(notefreq::E_4, NoteShape::SineSquared)),
+            PlaybackType::Wave(PlaybackWave::new(notefreq::G_4, NoteShape::SineSquared)),
+            PlaybackType::Wave(PlaybackWave::new(notefreq::B_4, NoteShape::SineSquared))
         )});
         second_map.insert(Finger::Ring, TriggerDefinition{notes: vec!(
-            PlaybackType::wave(PlaybackWave::new(notefreq::F_4, NoteShape::SineSquared)),
-            PlaybackType::wave(PlaybackWave::new(notefreq::A_4, NoteShape::SineSquared)),
-            PlaybackType::wave(PlaybackWave::new(notefreq::C_5, NoteShape::SineSquared))
+            PlaybackType::Wave(PlaybackWave::new(notefreq::F_4, NoteShape::SineSquared)),
+            PlaybackType::Wave(PlaybackWave::new(notefreq::A_4, NoteShape::SineSquared)),
+            PlaybackType::Wave(PlaybackWave::new(notefreq::C_5, NoteShape::SineSquared))
         )});
         second_map.insert(Finger::Little, TriggerDefinition{notes: vec!(
-            PlaybackType::wave(PlaybackWave::new(notefreq::G_4, NoteShape::SineSquared)),
-            PlaybackType::wave(PlaybackWave::new(notefreq::B_4, NoteShape::SineSquared)),
-            PlaybackType::wave(PlaybackWave::new(notefreq::D_5, NoteShape::SineSquared))
+            PlaybackType::Wave(PlaybackWave::new(notefreq::G_4, NoteShape::SineSquared)),
+            PlaybackType::Wave(PlaybackWave::new(notefreq::B_4, NoteShape::SineSquared)),
+            PlaybackType::Wave(PlaybackWave::new(notefreq::D_5, NoteShape::SineSquared))
         )});
         map.insert(1, second_map);
 
         let file = Box::new(File::open(Path::new("/home/drew/Downloads/Strings/violin/violin_A3_1_piano_arco-normal.mp3")).unwrap());
         let mss = MediaSourceStream::new(file, Default::default());
-        let hint = Hint::new();
+        let mut hint = Hint::new();
+        hint.with_extension("mp3");
         let format_opts: FormatOptions = Default::default();
         let metadata_opts: MetadataOptions = Default::default();
         let decoder_opts: DecoderOptions = Default::default();
-        let probed = symphonia::default::get_probe().format(&hint, mss, &format_opts, &metadata_opts).unwrap();
+        let probed = symphonia::default::get_probe().format(&hint, mss, &format_opts, &metadata_opts).expect("unsupported format");
         let mut format = probed.format;
         let track = format.default_track().unwrap();
         let mut decoder = symphonia::default::get_codecs().make(&track.codec_params, &decoder_opts).unwrap();
         let track_id = track.id;
         let mut sample_count = 0;
+        
         let mut sample_buf: Option<SampleBuffer<f32>> = None;
         let packet = format.next_packet().unwrap();
         let bufref = decoder.decode(&packet).expect("couldn't decode packet");
@@ -302,11 +299,11 @@ impl State {
         };
 
         let mut third_map = HashMap::new();
-        third_map.insert(Finger::Thumb, TriggerDefinition{notes: vec!(PlaybackType::sample(sample.clone()))});
-        third_map.insert(Finger::Index, TriggerDefinition{notes: vec!(PlaybackType::sample(sample.clone()))});
-        third_map.insert(Finger::Middle, TriggerDefinition{notes: vec!(PlaybackType::sample(sample.clone()))});
-        third_map.insert(Finger::Ring, TriggerDefinition{notes: vec!(PlaybackType::sample(sample.clone()))});
-        third_map.insert(Finger::Little, TriggerDefinition{notes: vec!(PlaybackType::sample(sample.clone()))});
+        third_map.insert(Finger::Thumb, TriggerDefinition{notes: vec!(PlaybackType::Sample(sample.clone()))});
+        third_map.insert(Finger::Index, TriggerDefinition{notes: vec!(PlaybackType::Sample(sample.clone()))});
+        third_map.insert(Finger::Middle, TriggerDefinition{notes: vec!(PlaybackType::Sample(sample.clone()))});
+        third_map.insert(Finger::Ring, TriggerDefinition{notes: vec!(PlaybackType::Sample(sample.clone()))});
+        third_map.insert(Finger::Little, TriggerDefinition{notes: vec!(PlaybackType::Sample(sample.clone()))});
         map.insert(2, third_map);
 
 
