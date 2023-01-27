@@ -56,35 +56,81 @@ struct PlaybackWave {
 
 impl PlaybackWave {
     fn new(freq: f32, shape: NoteShape) -> PlaybackWave {
-        PlaybackWave { freq: freq, target_freq: freq, shape: shape, phase: 0f32 }
+        PlaybackWave {
+            freq: freq,
+            target_freq: freq,
+            shape: shape,
+            phase: 0f32
+        }
     }
 }
 
 #[derive(Debug, Clone, PartialEq)]
 struct PlaybackSample {
-    sample_def: Box<[u8]>,
-    freq: f32,
-    target_freq: f32,
+    sample_def: Vec<f32>,
+    freq: u32,
+    target_freq: u32,
+    phase: f32,
+}
+
+impl PlaybackSample {
+    fn new(sample_def: Vec<f32>, freq: u32) -> PlaybackSample {
+        PlaybackSample {
+            sample_def: sample_def,
+            target_freq: freq,
+            freq: freq,
+            phase: 0f32
+        }
+    }
 }
 
 trait PlaybackTypeItem {
-    fn get_sample(&mut self, sample_rate: f32, i: u32) -> f32;
+    fn get_sample(&mut self, sample_rate: u32, i: u32) -> f32;
     fn adjust_freq(&mut self, mult: f32);
 }
 
 
 impl PlaybackTypeItem for PlaybackSample {
-    fn get_sample(&mut self, sample_rate: f32, i: u32) -> f32 {
-        return 0f32;
+    fn get_sample(&mut self, sample_rate: u32, i: u32) -> f32 {
+        if self.target_freq != self.freq {
+            let old_index = (i as f32 * (self.freq as f32 / sample_rate as f32) as f32) + self.phase;
+            let new_index = (i as f32 * (self.target_freq as f32 / sample_rate as f32) as f32);
+            self.freq = self.target_freq;
+            self.phase = old_index - new_index;
+        }
+        let sample_index = (i as f32 * (self.freq as f32 / sample_rate as f32) as f32) + self.phase;
+        let first_index = (sample_index as u32 % self.sample_def.len() as u32) as usize;
+        let second_index = ((sample_index as u32 + 1) % self.sample_def.len() as u32) as usize;
+        let second_weight = (sample_index - sample_index.floor());
+        let first_weight = 1.0 - second_weight;
+
+        let raw_sample_value =
+            self.sample_def[first_index] as f32 * first_weight +
+            self.sample_def[second_index] as f32 * second_weight
+        ;
+        let result = raw_sample_value as f32 * 10.0;
+        if i % 1019 == 0 {
+            println!(
+                "i: {}, Freq: {}, Sample rate: {}, Sample index: {}, data len: {}, Raw Val: {}, result: {}",
+                i,
+                self.freq,
+                sample_rate,
+                sample_index,
+                self.sample_def.len(),
+                raw_sample_value,
+                result
+            );
+        }
+        result
     }
 
     fn adjust_freq(&mut self, mult: f32) {
-        self.freq = self.freq * mult;
+        self.target_freq = (self.target_freq as f32 * mult).round() as u32;
     }
 }
 
 impl PlaybackTypeItem for PlaybackWave {
-    fn get_sample(&mut self, sample_rate: f32, i: u32) -> f32 {
+    fn get_sample(&mut self, sample_rate: u32, i: u32) -> f32 {
         let twopi = 2.0 * PI;
         let t = (i as f32 % (sample_rate as f32 * self.freq)) as f32 / sample_rate as f32;
         if self.target_freq != self.freq {
@@ -112,7 +158,7 @@ impl PlaybackTypeItem for PlaybackWave {
     }
 
     fn adjust_freq(&mut self, mult: f32) {
-        self.freq = self.freq * mult;
+        self.target_freq = self.target_freq * mult;
     }
 }
 
@@ -123,7 +169,7 @@ enum PlaybackType {
 }
 
 impl PlaybackType {
-    fn get_sample(&mut self, sample_rate: f32, i: u32) -> f32 {
+    fn get_sample(&mut self, sample_rate: u32, i: u32) -> f32 {
         match self {
             PlaybackType::Wave(x) => x.get_sample(sample_rate, i),
             PlaybackType::Sample(x) => x.get_sample(sample_rate, i),
@@ -145,7 +191,7 @@ pub struct TriggerDefinition {
 }
 
 impl TriggerDefinition {
-    fn get_sample(&mut self, sample_rate: f32, i: u32) -> f32 {
+    fn get_sample(&mut self, sample_rate: u32, i: u32) -> f32 {
         let mut sum = 0f32;
         for note in &mut self.notes {
             sum += note.get_sample(sample_rate, i);
@@ -210,7 +256,7 @@ impl Note {
             }
         }
 
-        self.trigger.get_sample(sample_rate as f32, i) * self.volume
+        self.trigger.get_sample(sample_rate, i) * self.volume
     }
 
     fn update_position(&mut self, position: LeapRustVector) {
@@ -285,18 +331,35 @@ impl State {
         let probed = symphonia::default::get_probe().format(&hint, mss, &format_opts, &metadata_opts).expect("unsupported format");
         let mut format = probed.format;
         let track = format.default_track().unwrap();
-        let mut decoder = symphonia::default::get_codecs().make(&track.codec_params, &decoder_opts).unwrap();
+        let mut decoder = symphonia::default::get_codecs().make(
+            &track.codec_params,
+            &decoder_opts
+        ).unwrap();
         let track_id = track.id;
         let mut sample_count = 0;
-        
         let mut sample_buf: Option<SampleBuffer<f32>> = None;
-        let packet = format.next_packet().unwrap();
-        let bufref = decoder.decode(&packet).expect("couldn't decode packet");
-        let sample = PlaybackSample {
-            sample_def: packet.data,
-            freq: bufref.spec().rate as f32,
-            target_freq: bufref.spec().rate as f32,
-        };
+        let mut joined_data = Vec::new();
+        let first_packet = format.next_packet().unwrap();
+        let mut spec_freq = 0;
+        //let bufref = &decoder.decode(&first_packet).expect("couldn't decode packet");
+        while let Some(packet) = format.next_packet().ok() {
+            let decoded = decoder.decode(&packet).expect("Unable to decode packet");
+            let spec = *decoded.spec();
+            spec_freq = spec.rate;
+            let mut samples = SampleBuffer::new(decoded.frames() as u64, spec);
+            samples.copy_interleaved_ref(decoded);
+            for frame in samples.samples().chunks(spec.channels.count()) {
+                for (chan, sample) in frame.iter().enumerate() {
+                    joined_data.push(*sample);
+                }
+            }
+
+        }
+
+        let sample = PlaybackSample::new(
+            joined_data,
+            spec_freq
+        );
 
         let mut third_map = HashMap::new();
         third_map.insert(Finger::Thumb, TriggerDefinition{notes: vec!(PlaybackType::Sample(sample.clone()))});
@@ -311,7 +374,7 @@ impl State {
             active_playback: Vec::new(),
             sample_rate: sample_rate,
             freq_map: map,
-            selected_map: 0,
+            selected_map: 2,
             retrigger: false,
             shape: NoteShape::SineSquared
         };
@@ -436,9 +499,11 @@ fn read_and_play(frame_ptr: *mut LeapRustFrame, notes: &mut State) {
         if hand.isLeft == 0 {
             continue;
         }
-        if hand.fingers[1].tipPosition.y < 200.0 {
+        if hand.fingers[2].tipPosition.y < 200.0 {
+            notes.selected_map = 2;
+        } else if hand.fingers[3].tipPosition.y < 200.0 {
             notes.selected_map = 1;
-        } else if hand.fingers[0].tipPosition.y < 200.0 {
+        } else if hand.fingers[4].tipPosition.y < 200.0 {
             notes.selected_map = 0;
         }
     }
