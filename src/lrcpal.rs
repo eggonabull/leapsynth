@@ -3,14 +3,15 @@ use cpal::traits::{DeviceTrait, HostTrait};
 use crate::leaprust::{LeapRustVector, LeapRustFrame};
 use crate::lrviz::AppEvent;
 use std::collections::HashMap;
+use std::f32::NEG_INFINITY;
 use std::f32::consts::PI;
 use std::fmt;
 use std::fmt::Display;
 use std::sync::atomic::{AtomicPtr, Ordering};
 use rtrb::Consumer;
-
 use std::fs::File;
 use std::path::Path;
+use std::cmp::Ordering as CmpOrdering;
 
 use symphonia::core::io::MediaSourceStream;
 use symphonia::core::audio::SampleBuffer;
@@ -71,15 +72,79 @@ struct PlaybackSample {
     freq: u32,
     target_freq: u32,
     phase: f32,
+    first_sample: bool,
+    adjustment: u32,
+    loop_start: Option<usize>,
+    loop_end: Option<usize>
 }
+
+
+fn yield_slices<'a>(v: &'a [f32]) -> Vec<&'a[f32]> {
+    let mut slices = vec![];
+    let mut start = 0;
+    let mut current_direction = CmpOrdering::Greater;
+    let sum_size = 10;
+    for i in sum_size..v.len() {
+        let direction = (v[i-(sum_size/2 - 1)..i].iter().sum::<f32>()).partial_cmp(&v[i-(sum_size - 1)..i-(sum_size/2)].iter().sum::<f32>()).unwrap();
+        if direction != current_direction {
+            slices.push(&v[start..i]);
+            start = i;
+            current_direction = direction;
+        }
+    }
+    slices.push(&v[start..]);
+    slices
+}
+
+
+fn find_sustain_sample_bounds(signal: &Vec<f32>) -> (Option<usize>, Option<usize>) {
+    let mut peak_amplitude = std::f32::NEG_INFINITY;
+    let mut peak_index = 0 as usize;
+    for (i, amplitude) in signal.iter().cloned().enumerate() {
+        if amplitude > peak_amplitude {
+            peak_index = i;
+            peak_amplitude = amplitude;
+        }
+    }
+    let slices = yield_slices(signal);
+    for slice in slices {
+        println!("slice len {} slice[0] {} slice[len-1] {}", slice.len(), slice[0], slice[slice.len() - 1]);
+    }
+    let threshold = peak_amplitude * 0.1;
+    let mut first_index = None;
+    let mut last_index = None;
+    for (i, amplitude) in signal[peak_index..].iter().cloned().enumerate() {
+        if amplitude >= peak_amplitude - threshold {
+            first_index = Some(i + peak_index);
+        } else {
+            break;
+        }
+    }
+    if let Some(first_index) = first_index {
+        for (i, amplitude) in signal[(first_index+1)..].iter().cloned().enumerate() {
+            if amplitude >= peak_amplitude - threshold {
+                last_index = Some(i + first_index);
+            }
+        }
+    }
+    println!("peak index {} first_index {:?} last_index {:?} len {:?}", peak_index, first_index, last_index, signal.len());
+    ///panic!("ahhhhh");
+    (first_index, last_index)
+}
+
 
 impl PlaybackSample {
     fn new(sample_def: Vec<f32>, freq: u32) -> PlaybackSample {
+        let (start, end) = find_sustain_sample_bounds(&sample_def);
         PlaybackSample {
             sample_def: sample_def,
             target_freq: freq,
             freq: freq,
-            phase: 0f32
+            phase: 0f32,
+            adjustment: 0u32,
+            first_sample: true,
+            loop_start: start,
+            loop_end: end
         }
     }
 }
@@ -92,13 +157,31 @@ trait PlaybackTypeItem {
 
 impl PlaybackTypeItem for PlaybackSample {
     fn get_sample(&mut self, sample_rate: u32, i: u32) -> f32 {
-        if self.target_freq != self.freq {
-            let old_index = (i as f32 * (self.freq as f32 / sample_rate as f32) as f32) + self.phase;
-            let new_index = (i as f32 * (self.target_freq as f32 / sample_rate as f32) as f32);
-            self.freq = self.target_freq;
-            self.phase = old_index - new_index;
+        // if self.target_freq != self.freq || self.first_sample{
+        //     let old_index = if self.first_sample {
+        //         println!("self.first_sample");
+        //         self.first_sample = false;
+        //         0f32
+        //     } else {
+        //         (i as f32 * (self.freq as f32 / sample_rate as f32) as f32) + self.phase
+        //     };
+        //     let new_index = i as f32 * (self.target_freq as f32 / sample_rate as f32) as f32;
+        //     self.freq = self.target_freq;
+        //     self.phase = old_index - new_index;
+        // }
+        let mut sample_index = ((i - self.adjustment) as f32 * (self.freq as f32 / sample_rate as f32) as f32) + self.phase;
+        let mut show_debug = false;
+        if let (Some(loop_start), Some(loop_end)) = (self.loop_start, self.loop_end) {
+            if sample_index > loop_end as f32 {
+                println!("current index {} loop_start {} loop_end {} phase {}", sample_index, loop_start, loop_end, self.phase);
+                let adjustment_incr = (loop_end as u32 - loop_start as u32) as f32 *  sample_rate as f32 / self.freq as f32;
+                self.adjustment += adjustment_incr as u32;
+                let new_index = ((i - self.adjustment) as f32 * (self.freq as f32 / sample_rate as f32) as f32) + self.phase;
+                sample_index = new_index;
+                show_debug = true;
+            }
         }
-        let sample_index = (i as f32 * (self.freq as f32 / sample_rate as f32) as f32) + self.phase;
+
         let first_index = (sample_index as u32 % self.sample_def.len() as u32) as usize;
         let second_index = ((sample_index as u32 + 1) % self.sample_def.len() as u32) as usize;
         let second_weight = (sample_index - sample_index.floor());
@@ -109,7 +192,7 @@ impl PlaybackTypeItem for PlaybackSample {
             self.sample_def[second_index] as f32 * second_weight
         ;
         let result = raw_sample_value as f32 * 10.0;
-        if i % 1019 == 0 {
+        if i % 81049 == 0 || show_debug {
             println!(
                 "i: {}, Freq: {}, Sample rate: {}, Sample index: {}, data len: {}, Raw Val: {}, result: {}",
                 i,
@@ -271,6 +354,43 @@ impl Note {
     }
 }
 
+fn file_to_sample(path: &str) -> PlaybackSample {
+    let file = Box::new(File::open(Path::new(path)).expect(&format!("Couldn't open path {}", path)));
+    let mss = MediaSourceStream::new(file, Default::default());
+    let mut hint = Hint::new();
+    hint.with_extension("mp3");
+    let format_opts: FormatOptions = Default::default();
+    let metadata_opts: MetadataOptions = Default::default();
+    let decoder_opts: DecoderOptions = Default::default();
+    let probed = symphonia::default::get_probe().format(&hint, mss, &format_opts, &metadata_opts).expect("unsupported format");
+    let mut format = probed.format;
+    let track = format.default_track().unwrap();
+    let mut decoder = symphonia::default::get_codecs().make(
+        &track.codec_params,
+        &decoder_opts
+    ).unwrap();
+    let mut joined_data = Vec::new();
+    let mut spec_freq = 0;
+    while let Some(packet) = format.next_packet().ok() {
+        let decoded = decoder.decode(&packet).expect("Unable to decode packet");
+        let spec = *decoded.spec();
+        spec_freq = spec.rate;
+        let mut samples = SampleBuffer::new(decoded.frames() as u64, spec);
+        samples.copy_interleaved_ref(decoded);
+        for frame in samples.samples().chunks(spec.channels.count()) {
+            for (chan, sample) in frame.iter().enumerate() {
+                joined_data.push(*sample);
+            }
+        }
+    }
+
+    let sample = PlaybackSample::new(
+        joined_data,
+        spec_freq
+    );
+    sample
+}
+
 
 impl State {
     fn new(sample_rate: u32) -> State {
@@ -321,52 +441,22 @@ impl State {
         )});
         map.insert(1, second_map);
 
-        let file = Box::new(File::open(Path::new("/home/drew/Downloads/Strings/violin/violin_A3_1_piano_arco-normal.mp3")).unwrap());
-        let mss = MediaSourceStream::new(file, Default::default());
-        let mut hint = Hint::new();
-        hint.with_extension("mp3");
-        let format_opts: FormatOptions = Default::default();
-        let metadata_opts: MetadataOptions = Default::default();
-        let decoder_opts: DecoderOptions = Default::default();
-        let probed = symphonia::default::get_probe().format(&hint, mss, &format_opts, &metadata_opts).expect("unsupported format");
-        let mut format = probed.format;
-        let track = format.default_track().unwrap();
-        let mut decoder = symphonia::default::get_codecs().make(
-            &track.codec_params,
-            &decoder_opts
-        ).unwrap();
-        let track_id = track.id;
-        let mut sample_count = 0;
-        let mut sample_buf: Option<SampleBuffer<f32>> = None;
-        let mut joined_data = Vec::new();
-        let first_packet = format.next_packet().unwrap();
-        let mut spec_freq = 0;
-        //let bufref = &decoder.decode(&first_packet).expect("couldn't decode packet");
-        while let Some(packet) = format.next_packet().ok() {
-            let decoded = decoder.decode(&packet).expect("Unable to decode packet");
-            let spec = *decoded.spec();
-            spec_freq = spec.rate;
-            let mut samples = SampleBuffer::new(decoded.frames() as u64, spec);
-            samples.copy_interleaved_ref(decoded);
-            for frame in samples.samples().chunks(spec.channels.count()) {
-                for (chan, sample) in frame.iter().enumerate() {
-                    joined_data.push(*sample);
-                }
-            }
-
-        }
-
-        let sample = PlaybackSample::new(
-            joined_data,
-            spec_freq
-        );
-
         let mut third_map = HashMap::new();
-        third_map.insert(Finger::Thumb, TriggerDefinition{notes: vec!(PlaybackType::Sample(sample.clone()))});
-        third_map.insert(Finger::Index, TriggerDefinition{notes: vec!(PlaybackType::Sample(sample.clone()))});
-        third_map.insert(Finger::Middle, TriggerDefinition{notes: vec!(PlaybackType::Sample(sample.clone()))});
-        third_map.insert(Finger::Ring, TriggerDefinition{notes: vec!(PlaybackType::Sample(sample.clone()))});
-        third_map.insert(Finger::Little, TriggerDefinition{notes: vec!(PlaybackType::Sample(sample.clone()))});
+        third_map.insert(Finger::Thumb, TriggerDefinition{notes: vec!(
+            PlaybackType::Sample(file_to_sample("/home/drew/Downloads/Strings/violin/violin_A4_1_fortissimo_arco-normal.mp3"))
+        )});
+        third_map.insert(Finger::Index, TriggerDefinition{notes: vec!(
+            PlaybackType::Sample(file_to_sample("/home/drew/Downloads/Strings/violin/violin_B4_1_fortissimo_arco-normal.mp3"))
+        )});
+        third_map.insert(Finger::Middle, TriggerDefinition{notes: vec!(
+            PlaybackType::Sample(file_to_sample("/home/drew/Downloads/Strings/violin/violin_Cs5_1_fortissimo_arco-normal.mp3"))
+        )});
+        third_map.insert(Finger::Ring, TriggerDefinition{notes: vec!(
+            PlaybackType::Sample(file_to_sample("/home/drew/Downloads/Strings/violin/violin_E5_1_fortissimo_arco-normal.mp3"))
+        )});
+        third_map.insert(Finger::Little, TriggerDefinition{notes: vec!(
+            PlaybackType::Sample(file_to_sample("/home/drew/Downloads/Strings/violin/violin_Fs5_1_fortissimo_arco-normal.mp3"))
+        )});
         map.insert(2, third_map);
 
 
